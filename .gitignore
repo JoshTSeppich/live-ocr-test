@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# logs
+*.log
+
+# local runtime state
+.pixelpoker-local-state
+.DS_Store
+
+# editor / OS
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,1436 @@
+/* Live OCR Test — diagnostic harness layout. Reuses tokens from styles.css. */
+
+.lot {
+  display: grid;
+  grid-template-rows: 64px 1fr;
+  height: 100vh;
+  min-width: 1240px;
+  background: var(--bg-0);
+  color: var(--fg);
+  font-family: var(--sans);
+  gap: 1px;
+}
+
+.lot-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  background: var(--bg-1);
+  padding: 0 18px;
+  gap: 18px;
+}
+.lot-title { display: flex; align-items: center; gap: 12px; }
+.lot-title-mark {
+  width: 30px; height: 30px; border-radius: 4px;
+  background:
+    repeating-linear-gradient(45deg, var(--accent) 0 2px, transparent 2px 4px),
+    var(--accent-deep);
+  box-shadow: 0 0 0 1px var(--accent) inset, 0 0 24px -8px var(--accent);
+}
+.lot-title-text { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 0.16em; }
+.lot-title-sub  { font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted); letter-spacing: 0.06em; margin-top: 2px; }
+
+.lot-stats {
+  display: flex; justify-content: center; gap: 28px;
+}
+.lot-stat {
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.lot-stat-l { font-size: 9.5px; letter-spacing: 0.12em; color: var(--fg-muted); }
+.lot-stat-v { font-size: 15px; font-weight: 600; }
+.lot-stat-good { color: var(--good); }
+.lot-stat-warn { color: var(--warn); }
+.lot-stat-bad  { color: var(--danger); }
+
+.lot-bar-r { display: flex; gap: 8px; }
+.lot-btn {
+  appearance: none; border: 1px solid var(--accent);
+  background: var(--accent); color: var(--bg-0);
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em; font-weight: 600;
+  padding: 9px 18px; border-radius: 2px; cursor: pointer;
+}
+.lot-btn:hover { filter: brightness(1.1); }
+.lot-btn-secondary { background: var(--bg-2); color: var(--fg); border-color: var(--line); }
+.lot-btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.lot-btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.lot-btn:disabled { opacity: 0.5; cursor: default; }
+
+.lot-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+  background: var(--line-soft);
+  min-height: 0;
+}
+.lot-panel {
+  background: var(--bg-1);
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+}
+.lot-panel-h {
+  padding: 10px 14px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.lot-panel-title { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; }
+.lot-panel-meta { font-family: var(--mono); font-size: 10.5px; color: var(--fg-soft); }
+
+.lot-video {
+  grid-row: span 2;
+}
+.lot-video-body {
+  position: relative;
+  flex: 1;
+  background:
+    repeating-linear-gradient(45deg, oklch(14% 0.010 250) 0 6px, oklch(13% 0.010 250) 6px 12px);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.lot-video-body video {
+  max-width: 100%; max-height: 100%;
+  display: block;
+  background: #000;
+}
+.lot-video-empty {
+  text-align: center; padding: 40px; color: var(--fg-muted);
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em;
+  line-height: 1.7;
+}
+.lot-video-empty kbd {
+  font-family: var(--mono); font-size: 10.5px;
+  background: var(--bg-3); border: 1px solid var(--line);
+  padding: 2px 6px; border-radius: 2px; color: var(--fg);
+}
+.lot-video-region {
+  position: absolute;
+  border: 2px solid;
+  background: rgba(0,0,0,0.04);
+  pointer-events: none;
+}
+.lot-video-region-tag {
+  position: absolute; top: -18px; left: -1px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+  color: #fff; padding: 2px 6px;
+  white-space: nowrap;
+}
+.lot-video-region-draft {
+  border-style: dashed; border-color: var(--fg);
+  background: rgba(255,255,255,0.05);
+}
+.lot-video-overlay {
+  position: absolute; top: 8px; right: 8px;
+  font-family: var(--mono); font-size: 10px; color: var(--fg-soft);
+  background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 2px;
+  letter-spacing: 0.06em;
+}
+
+.lot-raw-body, .lot-events-body {
+  flex: 1; overflow-y: auto;
+  padding: 10px 14px;
+  font-family: var(--mono); font-size: 11.5px;
+  line-height: 1.55;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.lot-raw-body::-webkit-scrollbar, .lot-events-body::-webkit-scrollbar { width: 6px; }
+.lot-raw-body::-webkit-scrollbar-thumb, .lot-events-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+.lot-raw-body { white-space: pre-wrap; color: var(--fg-soft); }
+.lot-raw-body .raw-empty { color: var(--fg-dim); font-style: italic; }
+.lot-raw-tail {
+  background: oklch(22% 0.04 195);
+  padding: 4px 6px;
+  margin: 2px -6px;
+  border-left: 2px solid var(--accent);
+}
+
+.lot-events-empty {
+  padding: 18px; color: var(--fg-dim);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+}
+.lot-event {
+  display: grid;
+  grid-template-columns: 64px 18px 1fr 80px;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line-soft);
+  align-items: center;
+}
+.lot-event-ts { color: var(--fg-dim); font-size: 10.5px; }
+.lot-event-kind {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+  text-align: center; padding: 2px 0;
+  background: var(--bg-3); color: var(--fg-soft);
+  border-radius: 2px;
+}
+.lot-event-kind.k-fold  { background: oklch(28% 0.08 25);  color: var(--danger); }
+.lot-event-kind.k-call  { background: oklch(28% 0.02 250); color: var(--fg); }
+.lot-event-kind.k-bet,
+.lot-event-kind.k-raise { background: oklch(28% 0.08 195); color: var(--accent); }
+.lot-event-kind.k-win   { background: oklch(28% 0.08 145); color: var(--good); }
+.lot-event-kind.k-check { background: var(--bg-3);          color: var(--fg-soft); }
+.lot-event-kind.k-sys   { background: var(--bg-3);          color: var(--fg-soft); }
+.lot-event-kind.k-bot_decision { background: oklch(28% 0.08 195); color: var(--accent); }
+.lot-event-who  { color: var(--fg); }
+.lot-event-amt  { color: var(--warn); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Controls */
+.lot-controls {
+  display: flex; align-items: flex-start; gap: 18px;
+  padding: 14px;
+  flex-wrap: wrap;
+}
+
+/* Region picker */
+.lot-regions {
+  flex: 1; min-width: 260px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.lot-regions-h {
+  display: flex; align-items: center; gap: 10px;
+}
+.lot-regions-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+  color: var(--fg-muted);
+}
+.lot-regions-hint {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+  color: var(--fg-dim);
+}
+.lot-regions-empty {
+  font-family: var(--mono); font-size: 10.5px; color: var(--fg-dim);
+  font-style: italic; padding: 6px 0;
+}
+.lot-regions-list { display: flex; flex-direction: column; gap: 6px; }
+.lot-region-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 6px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.lot-region-row { display: flex; align-items: center; gap: 8px; }
+.lot-region-swatch {
+  width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
+}
+.lot-region-name {
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--fg);
+  font-family: var(--mono); font-size: 11px;
+  padding: 2px 6px; border-radius: 2px; width: 90px;
+}
+.lot-region-ms {
+  font-family: var(--mono); font-size: 10px; color: var(--fg-muted);
+  margin-left: auto;
+}
+.lot-btn-tiny {
+  font-size: 10px; padding: 3px 8px; letter-spacing: 0.06em;
+}
+.lot-btn-x {
+  background: var(--bg-3); color: var(--fg-soft); border-color: var(--line);
+  padding: 2px 7px; line-height: 1;
+}
+.lot-btn-x:hover { color: var(--danger); border-color: var(--danger); }
+.lot-region-sliders {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 10px;
+}
+.lot-region-slider {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px;
+}
+.lot-region-slider-l {
+  color: var(--fg-muted); width: 12px;
+}
+.lot-region-slider input[type=range] {
+  flex: 1; height: 3px; -webkit-appearance: none; appearance: none;
+  background: var(--bg-3); border-radius: 2px; outline: none;
+}
+.lot-region-slider input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+}
+.lot-region-slider-v {
+  color: var(--accent); width: 32px; text-align: right;
+}
+
+/* Per-region raw OCR sections */
+.lot-raw-section {
+  margin-bottom: 10px;
+}
+.lot-raw-section-h {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-left: 3px solid;
+  padding: 2px 6px;
+  margin-bottom: 4px;
+}
+
+.lot-control {
+  display: flex; flex-direction: column; gap: 6px; min-width: 120px;
+}
+.lot-control-l {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+  color: var(--fg-muted);
+}
+.lot-control-v {
+  font-family: var(--mono); font-size: 13px; font-weight: 600;
+  color: var(--accent);
+}
+.lot-control input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 3px; background: var(--bg-3); border-radius: 2px;
+  outline: none;
+}
+.lot-control input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+}
+.lot-control input[type=range]::-moz-range-thumb {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); border: 0; cursor: pointer;
+}
+
+.lot-error {
+  margin: 14px;
+  padding: 12px 14px;
+  background: oklch(22% 0.10 25);
+  border: 1px solid var(--danger);
+  font-family: var(--mono); font-size: 11px;
+  color: var(--fg);
+  border-radius: 2px;
+}
+.lot-error-l { color: var(--danger); font-weight: 700; letter-spacing: 0.12em; margin-bottom: 4px; }
+
+.lot-help {
+  margin: 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  background: var(--bg-2);
+  font-size: 11.5px; line-height: 1.6;
+  color: var(--fg-soft);
+}
+.lot-help b { color: var(--fg); }
+.lot-help code {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--bg-3); padding: 1px 4px; border-radius: 2px;
+}
+
+.lot-link {
+  margin-left: auto;
+  color: var(--accent);
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.08em; text-decoration: none;
+}
+.lot-link:hover { text-decoration: underline; }
+
+/* Suggested Action — legacy, kept off-grid in case we re-introduce. */
+.lot-suggested {
+  grid-column: 3;
+  grid-row: 2;
+  overflow: hidden;
+}
+.lot-gamestate {
+  grid-column: 2;
+  grid-row: 2;
+  overflow: hidden;
+}
+/* New table view occupies col 3 row 2 (replaces SuggestedActionPanel). */
+.lot-table {
+  grid-column: 3;
+  grid-row: 2;
+  overflow: hidden;
+}
+.lot-table-body {
+  flex: 1;
+  display: flex; flex-direction: column;
+  min-height: 0;
+  padding: 6px;
+  background: oklch(13% 0.02 250);
+}
+.lot-table-svg {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+.lot-seat-pulse {
+  animation: lot-seat-pulse 1.6s ease-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+@keyframes lot-seat-pulse {
+  0%   { opacity: 0.7; transform: scale(0.85); }
+  100% { opacity: 0;   transform: scale(1.4);  }
+}
+.lot-table-decision {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg-2);
+  gap: 12px;
+}
+.lot-table-decision-l { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lot-table-decision-action {
+  font-family: var(--mono);
+  font-size: 16px; font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}
+.lot-table-decision-why {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lot-suggested-hero {
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  padding: 22px 16px;
+  background:
+    repeating-linear-gradient(45deg, oklch(14% 0.010 250) 0 6px, oklch(13% 0.010 250) 6px 12px);
+  border-bottom: 1px solid var(--line-soft);
+}
+.lot-sug-l {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em;
+  color: var(--fg-muted);
+}
+.lot-sug-keys { display: flex; gap: 6px; }
+.lot-sug-key {
+  font-family: var(--mono); font-size: 22px; font-weight: 700;
+  background: var(--accent); color: var(--bg-0);
+  padding: 8px 14px; min-width: 44px; text-align: center;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--accent), 0 0 32px -6px var(--accent), 0 2px 0 var(--accent-deep);
+}
+.lot-sug-action {
+  font-size: 16px; font-weight: 600; letter-spacing: 0.08em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+.lot-sug-idle {
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+  color: var(--fg-dim); font-style: italic;
+}
+
+.lot-kbd-grid {
+  flex: 1; overflow-y: auto;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.lot-kbd-grid::-webkit-scrollbar { width: 6px; }
+.lot-kbd-grid::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.lot-kbd-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 9px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.lot-kbd-label {
+  font-size: 11.5px;
+  color: var(--fg-soft);
+  letter-spacing: 0.02em;
+}
+.lot-kbd-keys { display: flex; gap: 4px; flex-shrink: 0; }
+.lot-kbd-key {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  background: var(--bg-3); color: var(--fg);
+  padding: 3px 7px; min-width: 22px; text-align: center;
+  border: 1px solid var(--line); border-radius: 3px;
+}
+.lot-kbd-active {
+  background: oklch(22% 0.05 195);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.lot-kbd-active .lot-kbd-label { color: var(--accent); font-weight: 600; }
+.lot-kbd-active .lot-kbd-key {
+  background: var(--accent); color: var(--bg-0); border-color: var(--accent);
+}
+
+.lot-sug-size {
+  font-family: var(--mono); font-weight: 500;
+  color: var(--warn); margin-left: 6px;
+}
+.lot-btn-fire {
+  margin-left: 14px;
+  background: var(--good); border-color: var(--good); color: var(--bg-0);
+  padding: 8px 18px;
+}
+.lot-btn-fire:disabled { background: var(--bg-3); border-color: var(--line); color: var(--fg-dim); }
+
+/* GameStatePanel */
+.lot-gs-body {
+  flex: 1; overflow-y: auto;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  font-family: var(--sans); font-size: 11.5px;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+}
+.lot-gs-body::-webkit-scrollbar { width: 6px; }
+.lot-gs-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.lot-gs-row {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+}
+.lot-gs-row label {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em;
+  color: var(--fg-muted); text-transform: uppercase;
+  min-width: 56px;
+}
+.lot-gs-row input[type=text],
+.lot-gs-row input[type=number],
+.lot-gs-row select {
+  background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--fg); font-family: var(--mono); font-size: 11px;
+  padding: 4px 6px; border-radius: 2px;
+  min-width: 70px;
+}
+.lot-gs-row input[type=text] { flex: 1; min-width: 120px; }
+.lot-gs-row select { min-width: 84px; }
+.lot-gs-check {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
+}
+.lot-gs-check input { margin: 0; }
+.lot-gs-section {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em;
+  color: var(--fg-muted);
+  margin: 6px 0 2px 0;
+  border-bottom: 1px dashed var(--line-soft); padding-bottom: 3px;
+}
+.lot-gs-status {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--fg-soft);
+}
+.lot-gs-ok  { color: var(--good); }
+.lot-gs-bad { color: var(--danger); }
+.lot-gs-dim { color: var(--fg-dim); }
+.lot-gs-stats {
+  display: flex; flex-wrap: wrap; gap: 14px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--fg-soft);
+}
+.lot-gs-stats b { color: var(--fg); font-weight: 600; margin-left: 4px; }
+
+.lot-gs-readout {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 3px 12px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--fg-soft);
+  padding: 2px 0;
+}
+.lot-gs-readout > div { display: flex; align-items: baseline; gap: 6px; }
+.lot-gs-l {
+  font-size: 9.5px; letter-spacing: 0.1em; color: var(--fg-muted);
+  text-transform: uppercase;
+  min-width: 56px;
+}
+.lot-gs-readout b { color: var(--fg); font-weight: 600; }
+
+/* MY HAND / BOARD card display */
+.lot-my-hand, .lot-my-board {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 0 10px 0;
+  border-bottom: 1px dashed var(--line-soft);
+  margin-bottom: 4px;
+}
+.lot-my-hand-l {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em;
+  color: var(--fg-muted); min-width: 56px;
+}
+.lot-my-hand-cards {
+  display: flex; gap: 6px;
+}
+.lot-card {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-family: var(--mono); font-weight: 700;
+  background: oklch(95% 0.005 250);
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5), 0 0 0 1px oklch(78% 0.005 250) inset;
+  line-height: 1;
+}
+.lot-card-lg { width: 44px; height: 60px; font-size: 20px; }
+.lot-card-md { width: 30px; height: 42px; font-size: 14px; }
+.lot-card-sm { width: 22px; height: 30px; font-size: 11px; }
+.lot-card-red   { color: #c4242a; }
+.lot-card-black { color: #131517; }
+.lot-card-rank { line-height: 1; }
+.lot-card-suit { line-height: 1; font-size: 0.95em; margin-top: 2px; }
+.lot-card-empty {
+  background: transparent;
+  border: 1px dashed var(--line);
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+.lot-prof-maniac  { color: var(--danger); }
+.lot-prof-station { color: var(--warn); }
+.lot-prof-nit     { color: var(--fg-soft); }
+.lot-prof-lag     { color: var(--accent); }
+.lot-prof-tag     { color: var(--good); }
+.lot-prof-unknown { color: var(--fg-dim); }
+
+/* ── Compact control panel ─────────────────────────────────────────────── */
+.lot-cp-primary {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  margin-bottom: 6px;
+}
+.lot-cp-auto {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.lot-cp-auto input { margin: 0; transform: scale(1.2); }
+.lot-cp-auto-on  { color: var(--danger); }
+.lot-cp-auto-off { color: var(--fg-soft); }
+.lot-cp-counter {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono);
+}
+.lot-cp-counter-l { font-size: 9.5px; letter-spacing: 0.14em; color: var(--fg-muted); }
+.lot-cp-counter-v { font-size: 14px; font-weight: 600; color: var(--fg); }
+.lot-cp-counter-sep { color: var(--fg-dim); margin: 0 1px; font-weight: 400; }
+.lot-cp-status {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  cursor: pointer;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg-3);
+  user-select: none;
+}
+.lot-cp-status:hover { border-color: var(--accent); }
+.lot-cp-fire {
+  font-family: var(--mono); font-size: 10.5px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  border-radius: 2px;
+  background: var(--bg-2);
+}
+.lot-cp-section {
+  margin-bottom: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+}
+.lot-cp-section summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--fg-soft);
+  user-select: none;
+  list-style: none;
+}
+.lot-cp-section summary::-webkit-details-marker { display: none; }
+.lot-cp-section summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s;
+  color: var(--fg-muted);
+}
+.lot-cp-section[open] summary::before { content: '▾ '; }
+.lot-cp-section summary:hover { color: var(--fg); }
+.lot-cp-section-body {
+  padding: 4px 10px 10px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.lot-tpl-missing {
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+  padding: 4px 0;
+}
+.lot-tpl-missing-l {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+  color: var(--fg-muted);
+  margin-right: 4px;
+}
+.lot-tpl-pill {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  padding: 2px 5px; border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-soft);
+}
+.lot-tpl-red   { color: #ff7a7f; }
+.lot-tpl-black { color: var(--fg); }
+.lot-tpl-learned { background: oklch(28% 0.05 145); border-color: var(--good); }
+
+/* Smoke test */
+.lot-smoke {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px 0 8px 0;
+  border-bottom: 1px dashed var(--line-soft);
+  margin-bottom: 4px;
+}
+.lot-smoke-bar { display: flex; align-items: center; gap: 10px; }
+.lot-smoke-badge {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em; font-weight: 700;
+}
+.lot-smoke-out {
+  font-family: var(--mono); font-size: 10px;
+  background: var(--bg-3); color: var(--fg-soft);
+  padding: 8px; border-radius: 2px; margin: 0;
+  white-space: pre; overflow-x: auto;
+  max-height: 240px; overflow-y: auto;
+}
+
+/* Hand review */
+.lot-hr-nav {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 0 6px 0;
+  border-bottom: 1px dashed var(--line-soft);
+}
+.lot-hr-nav-l {
+  flex: 1; text-align: center;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+  color: var(--fg-muted);
+}
+.lot-hr-meta {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px 12px;
+  padding: 6px 0;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--fg-soft);
+  border-bottom: 1px dashed var(--line-soft);
+}
+.lot-hr-meta > div { display: flex; align-items: baseline; gap: 6px; }
+.lot-hr-meta b { color: var(--fg); font-weight: 600; }
+.lot-hr-events {
+  max-height: 240px; overflow-y: auto;
+  padding: 4px 0;
+  font-family: var(--mono);
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+}
+.lot-hr-events::-webkit-scrollbar { width: 6px; }
+.lot-hr-events::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.lot-hr-row {
+  display: grid;
+  grid-template-columns: 42px 70px 1fr 72px;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 10.5px;
+  border-bottom: 1px dashed var(--line-soft);
+  align-items: center;
+}
+.lot-hr-row.lot-hr-bot {
+  background: oklch(22% 0.05 195 / 0.3);
+  padding-left: 4px;
+  margin-left: -4px;
+  border-left: 2px solid var(--accent);
+}
+.lot-hr-t { color: var(--fg-dim); text-align: right; }
+.lot-hr-who { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lot-hr-amt { color: var(--warn); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Toast notifications */
+.lot-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--good);
+  color: var(--bg-0);
+  font-family: var(--mono);
+  padding: 12px 18px;
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5), 0 0 0 1px var(--good),
+              0 0 32px -8px var(--good);
+  z-index: 9999;
+  animation: lot-toast-in 0.28s ease-out, lot-toast-out 0.35s ease-in 3s forwards;
+  pointer-events: none;
+  max-width: 260px;
+}
+.lot-toast-main {
+  font-size: 14px; font-weight: 700; letter-spacing: 0.06em;
+}
+.lot-toast-sub {
+  font-size: 10px; opacity: 0.7;
+  margin-top: 4px; letter-spacing: 0.1em;
+}
+@keyframes lot-toast-in {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes lot-toast-out {
+  from { transform: translateY(0);    opacity: 1; }
+  to   { transform: translateY(16px); opacity: 0; }
+}
+
+/* Template backup (Phase 1) */
+.lot-backup-row {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  font-family: var(--mono); font-size: 10.5px;
+}
+.lot-backup-select {
+  font-family: var(--mono); font-size: 10.5px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 3px 6px; border-radius: 2px;
+}
+
+/* Manual teach (Phase 2) */
+.lot-teach-previews {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.lot-teach-preview-wrap {
+  display: flex; flex-direction: column; gap: 3px;
+  flex: 1 1 220px; min-width: 0;
+}
+.lot-teach-preview-l {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+  color: var(--fg-muted);
+}
+.lot-teach-canvas {
+  width: 100%; max-width: 320px;
+  height: auto;
+  background: #111;
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  image-rendering: pixelated;
+  display: block;
+}
+.lot-teach-flash {
+  border-color: var(--good) !important;
+  box-shadow: 0 0 0 1px var(--good), 0 0 16px -4px var(--good);
+  transition: box-shadow 0.1s ease-out;
+}
+.lot-teach-input {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 6px 8px; border-radius: 2px;
+}
+.lot-teach-input:focus { outline: none; border-color: var(--accent); }
+.lot-teach-helper {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.lot-teach-status {
+  font-family: var(--mono); font-size: 11px;
+  padding: 4px 6px; border-radius: 2px;
+  min-height: 18px;
+}
+.lot-teach-status-idle    { color: var(--fg-dim); background: transparent; }
+.lot-teach-status-ready   { color: var(--good);   background: oklch(22% 0.05 145 / 0.4); }
+.lot-teach-status-invalid { color: var(--danger); background: oklch(22% 0.05 25 / 0.4); }
+.lot-teach-log {
+  list-style: none; margin: 0; padding: 4px 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  max-height: 160px; overflow-y: auto;
+  font-family: var(--mono); font-size: 10.5px;
+}
+.lot-teach-log li { padding: 1px 0; color: var(--fg-soft); }
+.lot-teach-log-time { color: var(--fg-muted); margin-right: 4px; }
+.lot-teach-log-retaught { color: var(--warn); margin-left: 4px; }
+
+/* ── Digital-twin layout — overrides .lot-grid for the new two-column top + */
+/*                            full-width bottom stack. */
+.lot-grid-twin {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 1px;
+  background: var(--line-soft);
+  min-height: 0;
+}
+.lot-col-left   { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 1px; background: var(--line-soft); }
+.lot-col-right  { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.lot-col-bottom { grid-column: 1 / span 2; display: flex; flex-direction: column; min-width: 0; gap: 1px; background: var(--line-soft); }
+
+/* Templates & teach stack panel under the video. */
+.lot-teach-stack {}
+.lot-teach-stack-body {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px 10px 10px 10px;
+}
+
+/* ── Digital twin internals ──────────────────────────────────────────────── */
+.lot-twin-root {}
+.lot-twin-body {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px;
+  min-height: 0; overflow-y: auto;
+}
+.lot-twin-header {
+  display: flex; gap: 8px; align-items: center;
+  font-family: var(--mono); font-size: 11px;
+}
+.lot-twin-hero-l { color: var(--fg-muted); letter-spacing: 0.1em; }
+.lot-twin-hero-input {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 3px 6px; border-radius: 2px;
+  width: 160px;
+}
+.lot-twin-hero-input:focus { outline: none; border-color: var(--accent); }
+.lot-twin-btn-unknown {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--warn); letter-spacing: 0.08em;
+}
+
+.lot-twin-pot {
+  font-family: var(--mono); font-size: 32px; font-weight: 700;
+  text-align: center; color: var(--fg);
+  letter-spacing: 0.02em;
+}
+.lot-twin-pot-src {
+  font-size: 10px; font-weight: 400;
+  color: var(--fg-muted); margin-left: 8px;
+  letter-spacing: 0.08em;
+}
+
+.lot-twin-board {
+  display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;
+}
+
+.lot-twin-street {
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  letter-spacing: 0.18em; text-align: center;
+  color: var(--accent);
+}
+
+.lot-twin-hand-label { text-align: center; font-family: var(--mono); }
+.lot-twin-hand-label-main { font-size: 14px; font-weight: 700; color: var(--fg); }
+.lot-twin-hand-label-sub  { font-size: 11px; color: var(--fg-soft); letter-spacing: 0.06em; }
+.lot-twin-hand-label-empty { font-size: 11px; color: var(--fg-dim); }
+
+.lot-twin-seats {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding-top: 4px; border-top: 1px dashed var(--line-soft);
+}
+.lot-twin-seat {
+  display: flex; flex-direction: column; gap: 4px;
+  flex: 0 0 120px;
+  padding: 6px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+}
+.lot-twin-seat-hero    { border-color: var(--accent); }
+.lot-twin-seat-folded  { opacity: 0.4; }
+.lot-twin-seat-current {
+  box-shadow: 0 0 0 1px var(--good), 0 0 16px -4px var(--good);
+  border-color: var(--good);
+}
+.lot-twin-seat-head {
+  display: flex; gap: 4px; align-items: center;
+  font-family: var(--mono); font-size: 10.5px;
+}
+.lot-twin-seat-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg);
+}
+.lot-twin-seat-btn {
+  background: var(--accent); color: var(--bg-0);
+  font-weight: 700; font-size: 9.5px;
+  padding: 1px 4px; border-radius: 2px;
+  letter-spacing: 0.08em;
+}
+.lot-twin-seat-blind {
+  background: var(--bg-3); color: var(--fg-soft);
+  font-size: 9px; font-weight: 600;
+  padding: 1px 3px; border-radius: 2px;
+  letter-spacing: 0.06em;
+}
+.lot-twin-seat-cards { display: flex; gap: 3px; justify-content: center; }
+.lot-twin-seat-stack {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--fg-muted); text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.lot-twin-history {
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--mono); font-size: 10.5px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px 8px;
+  max-height: 220px; overflow-y: auto;
+  min-height: 60px;
+}
+.lot-twin-history-row { color: var(--fg-soft); }
+.lot-twin-history-verb-fold  { color: var(--fg-dim); }
+.lot-twin-history-verb-check { color: var(--fg-soft); }
+.lot-twin-history-verb-call  { color: #6bbcff; }
+.lot-twin-history-verb-bet,
+.lot-twin-history-verb-raise { color: var(--warn); }
+.lot-twin-history-verb-win   { color: var(--good); }
+.lot-twin-history-verb-board { color: var(--accent); }
+.lot-twin-history-verb-sys   { color: var(--fg-muted); }
+
+/* ── Card faces ──────────────────────────────────────────────────────────── */
+.lot-card-face {
+  position: relative;
+  width: 42px; height: 60px;
+  background: #f4f1e6;
+  border-radius: 4px;
+  border: 1px solid #b9b2a0;
+  font-family: 'Georgia', serif;
+  flex: 0 0 auto;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+.lot-card-face-red   { color: #d4453a; }
+.lot-card-face-black { color: #1a1a1a; }
+.lot-card-corner {
+  position: absolute;
+  font-size: 11px; font-weight: 700;
+  line-height: 1;
+}
+.lot-card-corner-tl { top: 3px; left: 4px; }
+.lot-card-corner-br { bottom: 3px; right: 4px; transform: rotate(180deg); }
+.lot-card-center {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+}
+.lot-card-slab {
+  width: 42px; height: 60px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.lot-card-slab-down {
+  background: oklch(28% 0.05 245);
+  border: 1px solid oklch(40% 0.08 245);
+  background-image: repeating-linear-gradient(45deg,
+    oklch(34% 0.06 245) 0 3px, transparent 3px 6px);
+}
+.lot-card-slab-empty {
+  background: transparent;
+  border: 1px dashed var(--line);
+}
+
+/* ── Manual fire panel ───────────────────────────────────────────────────── */
+.lot-fire-root {}
+.lot-fire-body {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 12px;
+}
+.lot-fire-row {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  font-family: var(--mono); font-size: 11px;
+}
+.lot-fire-l {
+  color: var(--fg-muted); letter-spacing: 0.08em; font-size: 10px;
+}
+.lot-fire-url {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 3px 6px; border-radius: 2px;
+  flex: 1 1 220px; min-width: 0;
+}
+.lot-fire-ticks {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 3px 6px; border-radius: 2px;
+  width: 64px;
+}
+.lot-fire-regex {
+  font-family: var(--mono); font-size: 10.5px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 3px 6px; border-radius: 2px;
+  flex: 1; min-width: 0;
+}
+.lot-fire-url:focus,
+.lot-fire-ticks:focus,
+.lot-fire-regex:focus { outline: none; border-color: var(--accent); }
+.lot-fire-buttons {
+  flex-wrap: wrap;
+}
+.lot-btn-fire {
+  appearance: none; border: 1px solid var(--warn);
+  background: transparent; color: var(--warn);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; font-weight: 600;
+  padding: 6px 12px; border-radius: 2px; cursor: pointer;
+}
+.lot-btn-fire:hover:not(:disabled) {
+  background: var(--warn); color: var(--bg-0);
+}
+.lot-btn-fire:disabled {
+  border-color: var(--line-soft); color: var(--fg-dim);
+  cursor: not-allowed;
+}
+.lot-fire-status-ok  { color: var(--good); }
+.lot-fire-status-bad { color: var(--danger); }
+.lot-fire-last {
+  font-family: var(--mono); font-size: 10.5px;
+  padding: 4px 6px; border-radius: 2px;
+  background: var(--bg-3);
+}
+
+/* ── Unified single-screen layout — replaces .lot-grid-twin ─────────── */
+.lot-grid-unified {
+  display: flex; flex-direction: column;
+  gap: 1px;
+  background: var(--line-soft);
+  min-height: 0;
+}
+.lot-row-top {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line-soft);
+  min-height: 0;
+}
+.lot-row-top > .lot-panel { min-width: 0; min-height: 0; }
+
+.lot-region-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 11px;
+}
+.lot-region-toolbar-l {
+  color: var(--fg-muted); letter-spacing: 0.1em; font-size: 10px;
+}
+.lot-region-toolbar-hint {
+  color: var(--fg-dim); font-size: 10px; margin-left: auto;
+}
+
+/* ── Teach zone ─────────────────────────────────────────────────────── */
+.lot-teach-zone-panel {}
+.lot-teach-zone {
+  display: grid;
+  grid-template-columns: 200px 1fr 280px;
+  gap: 14px;
+  padding: 14px;
+  min-height: 0;
+}
+.lot-teach-zone-l {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+.lot-teach-cell-col, .lot-teach-source-col, .lot-teach-label-col {
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;
+}
+.lot-teach-cell-wrap {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  background: #0a0a0a;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 10px;
+  min-height: 140px;
+}
+.lot-teach-cell-canvas {
+  image-rendering: pixelated;
+  width: 100%;
+  max-width: 180px;
+  height: auto;
+  background: #111;
+  /* explicit scale: small cells (16x24) should render large */
+  transform-origin: center;
+  display: block;
+}
+.lot-teach-cell-caption,
+.lot-teach-source-caption {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--fg-soft);
+  text-align: center;
+}
+.lot-teach-source-wrap {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  background: #0a0a0a;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px;
+  min-height: 140px;
+  overflow: hidden;
+}
+.lot-teach-source-canvas {
+  max-width: 100%;
+  max-height: 240px;
+  width: auto;
+  height: auto;
+  display: block;
+}
+.lot-teach-empty {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--fg-dim);
+  text-align: center;
+  padding: 16px;
+}
+
+.lot-teach-label-input {
+  font-family: var(--mono); font-size: 14px; font-weight: 700;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 6px 10px; border-radius: 2px;
+  letter-spacing: 0.08em;
+}
+.lot-teach-label-input:focus { outline: none; border-color: var(--accent); }
+.lot-teach-label-input:disabled { color: var(--fg-dim); background: var(--bg-2); }
+.lot-teach-label-error {
+  font-family: var(--mono); font-size: 10.5px;
+}
+.lot-teach-row-actions {
+  display: flex; gap: 6px;
+}
+.lot-teach-recent {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 200px; overflow-y: auto;
+}
+.lot-teach-recent-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px;
+}
+.lot-teach-recent-row:hover { border-color: var(--accent); }
+.lot-teach-recent-row-newest {
+  background: oklch(28% 0.07 25 / 0.55);
+  border-color: oklch(50% 0.15 25);
+}
+.lot-teach-undo-hint {
+  margin-left: auto;
+  color: var(--warn);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
+
+/* ── Relabel banner ─────────────────────────────────────────────────── */
+.lot-teach-relabel {
+  margin: 0 14px 14px 14px;
+  padding: 10px 12px;
+  background: oklch(28% 0.07 60 / 0.45);
+  border: 1px solid #ff9500;
+  border-radius: 3px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.lot-teach-relabel-head {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--fg);
+}
+.lot-teach-relabel-mark { color: #ff9500; font-size: 14px; }
+.lot-teach-relabel-body {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────── */
+.lot-footer {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 10.5px;
+  min-height: 38px;
+}
+.lot-footer-l {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.lot-footer-r {
+  display: flex; gap: 6px;
+}
+.lot-missing-chip {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  padding: 2px 5px; border-radius: 2px;
+  background: oklch(22% 0.08 25 / 0.5);
+  border: 1px solid oklch(45% 0.15 25);
+  color: #ff7a7f;
+  cursor: pointer;
+  user-select: none;
+}
+.lot-missing-chip:hover { border-color: var(--warn); }
+.lot-missing-chip-active {
+  background: var(--warn); color: var(--bg-0);
+  border-color: var(--warn);
+}
+
+/* ── Modals (slide-up from bottom) ─────────────────────────────────── */
+.lot-modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 9000;
+  display: flex; align-items: flex-end;
+  animation: lot-modal-fade-in 0.16s ease-out;
+}
+.lot-modal {
+  width: 100%;
+  max-height: 65vh;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line-soft);
+  display: flex; flex-direction: column;
+  animation: lot-modal-slide-up 0.22s ease-out;
+}
+.lot-modal-h {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+}
+.lot-modal-title { font-weight: 600; }
+.lot-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+@keyframes lot-modal-fade-in {
+  from { background: rgba(0,0,0,0); }
+  to   { background: rgba(0,0,0,0.55); }
+}
+@keyframes lot-modal-slide-up {
+  from { transform: translateY(40px); opacity: 0.5; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Settings popover ──────────────────────────────────────────────── */
+.lot-popover {
+  position: fixed;
+  z-index: 9100;
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+}
+.lot-popover-settings {
+  right: 14px;
+  bottom: 50px;
+  width: 360px;
+  max-height: calc(100vh - 80px);
+  display: flex; flex-direction: column;
+}
+.lot-popover-h {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em;
+}
+.lot-popover-title { font-weight: 600; }
+.lot-popover-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--fg-soft);
+  font-size: 18px; line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.lot-popover-close:hover { color: var(--fg); }
+.lot-popover-body {
+  flex: 1; overflow-y: auto;
+  padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.lot-settings-row {
+  display: grid;
+  grid-template-columns: 100px 1fr auto;
+  align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 10.5px;
+}
+.lot-settings-row-stack {
+  display: flex; flex-direction: column; align-items: stretch;
+}
+.lot-settings-l { color: var(--fg-muted); letter-spacing: 0.08em; font-size: 10px; }
+.lot-settings-v { color: var(--fg); font-variant-numeric: tabular-nums; }
+.lot-settings-input {
+  font-family: var(--mono); font-size: 10.5px;
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--line-soft);
+  padding: 4px 6px; border-radius: 2px;
+  width: 100%;
+}
+.lot-settings-input:focus { outline: none; border-color: var(--accent); }
+
+/* ── Manual fire panel: dim/bright + color-coded buttons ───────────── */
+.lot-fire-root { transition: opacity 0.18s; }
+.lot-fire-root[data-action-on="false"] { opacity: 0.55; }
+.lot-fire-root[data-action-on="true"]  { opacity: 1; }
+.lot-fire-row-status {
+  border-bottom: 1px dashed var(--line-soft);
+  padding-bottom: 6px;
+}
+.lot-fire-pill-turn {
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #ff9500;
+  background: oklch(28% 0.07 60 / 0.45);
+  border: 1px solid #ff9500;
+  padding: 3px 9px; border-radius: 2px;
+  text-shadow: 0 0 8px rgba(255,149,0,0.4);
+}
+.lot-fire-pill-idle {
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
+  padding: 3px 6px;
+}
+.lot-fire-btn-fold {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: oklch(22% 0.08 25 / 0.4);
+}
+.lot-fire-btn-fold:hover:not(:disabled) { background: var(--danger); color: #fff; }
+.lot-fire-btn-call {
+  border-color: oklch(70% 0.15 195);
+  color: oklch(82% 0.13 195);
+  background: oklch(22% 0.05 195 / 0.4);
+}
+.lot-fire-btn-call:hover:not(:disabled) {
+  background: oklch(60% 0.15 195); color: var(--bg-0);
+}
+.lot-fire-btn-raise {
+  border-color: #ff9500;
+  color: #ff9500;
+  background: oklch(28% 0.07 60 / 0.4);
+}
+.lot-fire-btn-raise:hover:not(:disabled) { background: #ff9500; color: var(--bg-0); }
+.lot-fire-secondary-wrap { position: relative; }
+.lot-fire-secondary-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px;
+  display: flex; flex-direction: column; gap: 4px;
+  z-index: 9050;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  min-width: 120px;
+}
+
+/* ── Info toast variant ───────────────────────────────────────────── */
+.lot-toast-info {
+  background: var(--accent);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5), 0 0 0 1px var(--accent),
+              0 0 32px -8px var(--accent);
+}
