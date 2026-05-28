@@ -108,6 +108,25 @@ function fmtAmount(n) {
   if (Number.isInteger(f)) return `$${f}`;
   return `$${f.toFixed(2)}`;
 }
+
+// Parse a recognized numeric glyph string ("$3.20", "1,250", "116.4B") into a
+// dollar Number. Strips currency/BB marks, treats comma as a thousands sep,
+// keeps the decimal point. Returns null if nothing numeric is left. (BB
+// conversion is deliberately NOT done here — it belongs at MOUTH_TABLE when
+// bot_link.js is built, per ARCHITECTURE.md §6; the v1 emit path is dollars.)
+function parseNumericText(text) {
+  if (!text) return null;
+  const cleaned = String(text).replace(/[$B\s,]/g, '');
+  if (!/[0-9]/.test(cleaned)) return null;
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Reduce an OCR'd ground-truth string to the closed digit/symbol alphabet, so
+// it can be aligned 1:1 with segmented glyph boxes when teaching.
+function cleanDigitGroundTruth(text) {
+  return String(text || '').replace(/[^0-9.,$B]/g, '');
+}
 const SUIT_GLYPH = { h: '♥', d: '♦', c: '♣', s: '♠' };
 
 function fmtBoardGlyphs(cards) {
@@ -279,6 +298,22 @@ function LiveOCRTest() {
     matcherRef.current ? matcherRef.current.size : 0);
   const [teachAttempts, setTeachAttempts] = React.useState(0);
   const [lastTeachAt, setLastTeachAt] = React.useState(0);
+
+  // Digit/symbol matcher — fast pre-Tesseract path for numeric readouts.
+  // Separate from the card matcher; persists under its own localStorage key.
+  const digitMatcherRef = React.useRef(null);
+  if (!digitMatcherRef.current && typeof window !== 'undefined' && window.PokerEngine
+      && window.PokerEngine.DigitMatcher) {
+    digitMatcherRef.current = new window.PokerEngine.DigitMatcher();
+  }
+  // Teach-time pixels per symbol (in-memory), so the smoke test can re-match a
+  // symbol against the exact glyph it was taught from. Not persisted.
+  const digitTeachPixelsRef = React.useRef(new Map());
+  const [digitCount, setDigitCount] = React.useState(() =>
+    digitMatcherRef.current ? digitMatcherRef.current.size : 0);
+  // Per-region last-emitted numeric value — suppresses re-emitting an unchanged
+  // reading every pass (anti-aliasing jitter the dHash didn't absorb).
+  const digitLastEmitRef = React.useRef(new Map());
 
   // Hand history — persists chat-grammar events to localStorage.
   const historyRef = React.useRef(null);
@@ -525,10 +560,43 @@ function LiveOCRTest() {
     }
   }, [turnPattern, regions]);
 
+  // ── Fast-path recognizer router (Component 3) ─────────────────────────────
+  // Invoked by useLiveOCR's loop in Phase 2, BEFORE Tesseract, once per region.
+  // Returns null to fall through to Tesseract, or { event, text } to handle the
+  // region this pass (the loop emits `event`, caches `text`, skips Tesseract).
+  //   - Only regions named like a numeric field are eligible. `turn` is NOT
+  //     here (it's button text, not digits; it stays on the Tesseract path).
+  //   - Pixels are pulled lazily via getPx() so ineligible regions cost nothing.
+  //   - pot → {kind:'pot', dollars} (v1 shape at live-ocr.jsx:512 → reducer:215).
+  //     stack/bet/to_call have no v1 consumer and kind:'bet' would collide with
+  //     the chat-action reducer, so they emit the existing {kind:'region_text'}.
+  //   - Unchanged readings re-emit nothing (event:null) but still skip Tesseract.
+  const recognizeFast = React.useCallback((region, getPx) => {
+    const dm = digitMatcherRef.current;
+    if (!dm || dm.size === 0) return null;               // nothing taught → Tesseract
+    const name = region.name || '';
+    if (!/pot|stack|bet|to_?call/i.test(name)) return null;
+    const px = getPx();
+    if (!px) return null;
+    const res = dm.recognizeNumeric(px.rgba, px.w, px.h);
+    if (res.text == null || res.unmatched !== 0) return null; // low confidence → Tesseract
+
+    const changed = digitLastEmitRef.current.get(region.id) !== res.text;
+    digitLastEmitRef.current.set(region.id, res.text);
+    if (!changed) return { event: null, text: res.text };  // same value → skip re-emit
+
+    if (/pot/i.test(name)) {
+      const dollars = parseNumericText(res.text);
+      if (dollars == null) return null;                    // unparseable → Tesseract
+      return { event: { kind: 'pot', dollars }, text: res.text };
+    }
+    return { event: { kind: 'region_text', text: res.text }, text: res.text };
+  }, []);
+
   const { status, error, latency, regionText, regionLatency, videoSize, stream,
-          start, stop, getRegionPixels } =
+          lastSkipped, fastPathHits, start, stop, getRegionPixels, getRegionOcrPixels } =
     useLiveOCR({ intervalMs: interval, regions, onEvent: handleEvent,
-                 preprocess, binarizeThreshold, ocrMaxWidth });
+                 preprocess, binarizeThreshold, ocrMaxWidth, recognizeFast });
 
   // Helper: slice a region's pixels into N evenly-spaced card cells.
   const cardCellsFromRegion = React.useCallback((regionId, n) => {
@@ -549,6 +617,62 @@ function LiveOCRTest() {
     }
     return cells;
   }, [getRegionPixels]);
+
+  // ── Digit teach (Component 3) ─────────────────────────────────────────────
+  // Teach the pot region's glyphs against a verified ground-truth string. Reads
+  // the BINARIZED pot canvas (the same representation DigitMatcher matches on),
+  // segments it, and labels box[i] = groundTruth[i]. We refuse to teach unless
+  // the box count equals the ground-truth length — that guard is what stops a
+  // mismatched string from poisoning templates. The pixel read is race-safe:
+  // JS is single-threaded, so a click can't land mid-Phase-1; the ocr canvas
+  // always holds a complete, coherent frame (the two-phase invariant holds).
+  const teachDigits = React.useCallback((groundTruth) => {
+    const dm = digitMatcherRef.current;
+    if (!dm) return { ok: false, msg: 'digit matcher unavailable' };
+    const potRegion = regions.find((r) => /pot/i.test(r.name || ''));
+    if (!potRegion) return { ok: false, msg: 'draw a region named like "pot" first' };
+    const gt = cleanDigitGroundTruth(groundTruth);
+    if (!gt) return { ok: false, msg: 'ground truth has no teachable symbols (0-9 . , $ B)' };
+    const px = getRegionOcrPixels && getRegionOcrPixels(potRegion.id);
+    if (!px) return { ok: false, msg: 'pot region not captured yet — connect the feed' };
+    const boxes = dm.segment(px.imageData, px.w, px.h);
+    if (boxes.length !== gt.length) {
+      return { ok: false, msg: `segmented ${boxes.length} glyph(s) but "${gt}" has ${gt.length} — tighten the region or fix the string` };
+    }
+    let taught = 0;
+    for (let i = 0; i < boxes.length; i++) {
+      if (dm.teach(gt[i], boxes[i].rgba, boxes[i].w, boxes[i].h)) {
+        digitTeachPixelsRef.current.set(gt[i], { rgba: boxes[i].rgba, w: boxes[i].w, h: boxes[i].h });
+        taught++;
+      }
+    }
+    setDigitCount(dm.size);
+    return { ok: true, msg: `taught ${taught} glyph(s) from "${gt}" (${dm.size}/14 learned)`, taught };
+  }, [regions, getRegionOcrPixels]);
+
+  // ── Digit smoke test (Component 3) ────────────────────────────────────────
+  // Re-match each taught symbol against the exact glyph it was taught from;
+  // expect symbol identity at confidence ≥ 0.99. A high-confidence match to a
+  // DIFFERENT symbol is a collision — the "needs a 4th hash" signal (8↔0, 3↔8,
+  // 5↔S). Pixels are in-memory only, so symbols taught in a prior session (lost
+  // on reload) are reported as un-testable rather than failing.
+  const smokeDigits = React.useCallback(() => {
+    const dm = digitMatcherRef.current;
+    if (!dm || dm.size === 0) return { ok: false, lines: ['no digits taught yet'] };
+    const lines = [];
+    let ok = true;
+    for (const s of dm.list()) {
+      const px = digitTeachPixelsRef.current.get(s);
+      if (!px) { lines.push(`  ${s}  no pixels this session (reload clears them)`); continue; }
+      const m = dm.match(px.rgba, px.w, px.h);
+      const conf = m ? m.confidence : 0;
+      const collision = m && m.symbol !== s && conf >= 0.85;
+      const pass = m && m.symbol === s && conf >= 0.99;
+      if (!pass) ok = false;
+      lines.push(`  ${s} → ${m ? m.symbol : '∅'} @ ${conf.toFixed(3)}  ${pass ? '✓' : collision ? '✗ COLLISION' : '✗ low'}`);
+    }
+    return { ok, lines };
+  }, []);
 
   // Frames-processed counter.
   React.useEffect(() => {
@@ -648,7 +772,15 @@ function LiveOCRTest() {
                          turnPattern={turnPattern} setTurnPattern={setTurnPattern}
                          matcher={matcherRef.current}
                          templateCount={templateCount} setTemplateCount={setTemplateCount}
-                         teachAttempts={teachAttempts} lastTeachAt={lastTeachAt} />
+                         teachAttempts={teachAttempts} lastTeachAt={lastTeachAt}
+                         digitMatcher={digitMatcherRef.current}
+                         digitCount={digitCount} setDigitCount={setDigitCount}
+                         potPrefill={(() => {
+                           const pr = regions.find((r) => /pot/i.test(r.name || ''));
+                           const t = pr ? (regionText[pr.id] || '') : '';
+                           return cleanDigitGroundTruth(t.split('\n')[0]);
+                         })()}
+                         onTeachDigits={teachDigits} onSmokeDigits={smokeDigits} />
       )}
       {showRawOcr && (
         <RawOcrModal regionText={regionText} regions={regions}
@@ -1100,7 +1232,74 @@ function runMatcherSmokeTest() {
 // ───────────────────────────────────────────────────────────────────────────
 // Templates collapsible — count, learned/missing pills, smoke test, clear all.
 // ───────────────────────────────────────────────────────────────────────────
-function TemplatesPanel({ matcher, templateCount, setTemplateCount, teachAttempts, lastTeachAt }) {
+const DIGIT_SYMBOLS = '0123456789.,$B';
+
+// 💲 Digits subsection — fast-path numeric template library. Teach the pot
+// region's glyphs from a verified ground-truth string, smoke-test taught
+// symbols against themselves, and clear.
+function DigitsSubsection({ digitMatcher, digitCount, setDigitCount, potPrefill, onTeach, onSmoke }) {
+  const [gt, setGt] = React.useState('');
+  const [teachMsg, setTeachMsg] = React.useState(null);
+  const [smoke, setSmoke] = React.useState(null);
+  React.useEffect(() => { if (potPrefill && !gt) setGt(potPrefill); }, [potPrefill]); // prefill once
+  const learned = new Set(digitMatcher ? digitMatcher.list() : []);
+  const doTeach = () => { setSmoke(null); setTeachMsg(onTeach(gt)); };
+  const doSmoke = () => { setTeachMsg(null); setSmoke(onSmoke()); };
+  return (
+    <details className="lot-cp-section" open={digitCount > 0 && digitCount < 14}>
+      <summary>💲 Digits &middot; {digitCount}/14{digitCount >= 14 ? ' ✓ complete' : ''}</summary>
+      <div className="lot-cp-section-body">
+        <div className="lot-tpl-missing">
+          {DIGIT_SYMBOLS.split('').map((s) => (
+            <span key={s}
+                  className={'lot-tpl-pill ' + (learned.has(s) ? 'lot-tpl-learned lot-tpl-black' : '')}
+                  title={learned.has(s) ? 'taught' : 'untaught'}>
+              {s === ' ' ? '␣' : s}
+            </span>
+          ))}
+        </div>
+        <div className="lot-gs-status">
+          <span className="lot-gs-dim">ground truth (what the pot region shows): </span>
+          <input className="lot-input lot-input-tiny" value={gt}
+                 onChange={(e) => setGt(e.target.value)}
+                 placeholder="$3.20" spellCheck={false} style={{ width: '7em' }} />
+          <button className="lot-btn lot-btn-secondary lot-btn-tiny"
+                  onClick={doTeach} disabled={!gt}>TEACH POT GLYPHS</button>
+        </div>
+        {teachMsg && (
+          <div className={'lot-gs-status ' + (teachMsg.ok ? 'lot-gs-ok' : 'lot-gs-bad')}>
+            {teachMsg.ok ? '● ' : '⚠ '}{teachMsg.msg}
+          </div>
+        )}
+        <div className="lot-smoke-bar">
+          <button className="lot-btn lot-btn-tiny" onClick={doSmoke} disabled={digitCount === 0}>
+            ▶ SMOKE TEST
+          </button>
+          {smoke && (
+            <span className={'lot-smoke-badge ' + (smoke.ok ? 'lot-gs-ok' : 'lot-gs-bad')}>
+              {smoke.ok ? 'PASS' : 'CHECK'}
+            </span>
+          )}
+          {digitMatcher && digitCount > 0 && (
+            <button className="lot-btn lot-btn-secondary lot-btn-tiny"
+                    onClick={() => { digitMatcher.clear(); setDigitCount(0); setSmoke(null); setTeachMsg(null); }}>
+              CLEAR DIGITS
+            </button>
+          )}
+        </div>
+        {smoke && <pre className="lot-smoke-out">{smoke.lines.join('\n')}</pre>}
+        {digitCount === 0 && (
+          <div className="lot-gs-status lot-gs-dim">
+            — teach the 14 symbols from a few pot reads; until then the fast path falls through to Tesseract —
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function TemplatesPanel({ matcher, templateCount, setTemplateCount, teachAttempts, lastTeachAt,
+                          digitMatcher, digitCount, setDigitCount, potPrefill, onTeachDigits, onSmokeDigits }) {
   const all = [];
   for (const r of '23456789TJQKA') for (const s of 'shdc') all.push(r + s);
   const learned = new Set(matcher ? matcher.list() : []);
@@ -1151,6 +1350,9 @@ function TemplatesPanel({ matcher, templateCount, setTemplateCount, teachAttempt
             CLEAR ALL
           </button>
         )}
+        <DigitsSubsection digitMatcher={digitMatcher} digitCount={digitCount}
+                          setDigitCount={setDigitCount} potPrefill={potPrefill}
+                          onTeach={onTeachDigits} onSmoke={onSmokeDigits} />
       </div>
     </details>
   );
@@ -1927,6 +2129,7 @@ function SettingsPopover({
   turnPattern, setTurnPattern,
   matcher, templateCount, setTemplateCount,
   teachAttempts, lastTeachAt,
+  digitMatcher, digitCount, setDigitCount, potPrefill, onTeachDigits, onSmokeDigits,
 }) {
   // Close on Escape or outside-click.
   const rootRef = React.useRef(null);
@@ -1990,7 +2193,13 @@ function SettingsPopover({
                         templateCount={templateCount}
                         setTemplateCount={setTemplateCount}
                         teachAttempts={teachAttempts}
-                        lastTeachAt={lastTeachAt} />
+                        lastTeachAt={lastTeachAt}
+                        digitMatcher={digitMatcher}
+                        digitCount={digitCount}
+                        setDigitCount={setDigitCount}
+                        potPrefill={potPrefill}
+                        onTeachDigits={onTeachDigits}
+                        onSmokeDigits={onSmokeDigits} />
         <TemplateBackupSection matcher={matcher}
                                templateCount={templateCount}
                                setTemplateCount={setTemplateCount} />

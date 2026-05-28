@@ -313,7 +313,8 @@ function hamming64(a, b) {
 // `preprocess` controls the binarize+invert pipeline; `ocrMaxWidth` caps the
 // processed image width (the source canvas always keeps full resolution).
 function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
-                       preprocess = true, ocrMaxWidth = 1200, binarizeThreshold = 128 }) {
+                       preprocess = true, ocrMaxWidth = 1200, binarizeThreshold = 128,
+                       recognizeFast }) {
   const [status, setStatus] = React.useState('idle'); // idle|connecting|running|error
   const [error, setError]   = React.useState(null);
   const [latency, setLatency] = React.useState(null);          // sum across regions, last pass
@@ -322,6 +323,7 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
   const [videoSize, setVideoSize] = React.useState(null);
   const [stream, setStream] = React.useState(null);
   const [lastSkipped, setLastSkipped] = React.useState(0);     // cumulative ROI hash-skips
+  const [fastPathHits, setFastPathHits] = React.useState(0);   // cumulative DigitMatcher fast-path hits
 
   const streamRef = React.useRef(null);
   const videoRef  = React.useRef(null);
@@ -341,6 +343,8 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
   intervalRef.current = intervalMs;
   const regionsRef = React.useRef(regions);
   regionsRef.current = regions;
+  const recognizeFastRef = React.useRef(recognizeFast);
+  recognizeFastRef.current = recognizeFast;
   const preprocessRef = React.useRef(preprocess);
   preprocessRef.current = preprocess;
   const ocrMaxWidthRef = React.useRef(ocrMaxWidth);
@@ -415,6 +419,7 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
     setRegionLatency({});
     setVideoSize(null);
     setLastSkipped(0);
+    setFastPathHits(0);
   }, []);
 
   const loop = async () => {
@@ -428,6 +433,7 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
       if (vw && vh && regs.length) {
         let totalMs = 0;
         let skipped = 0;
+        let fastHits = 0;
         const latencyPatch = {};
         const textPatch = {};
         if (!dhashScratchRef.current) dhashScratchRef.current = new OffscreenCanvas(9, 8);
@@ -506,6 +512,37 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
               continue;
             }
           }
+
+          // ── Fast-path recognizer router (Component 3) ─────────────────────
+          // BEFORE Tesseract, per region. The router (in live-ocr-test.jsx)
+          // decides eligibility by region name and runs DigitMatcher on the
+          // binarized ocr canvas. It pulls pixels lazily via the thunk so
+          // non-eligible regions cost nothing. A truthy result means the region
+          // is handled this pass: emit its event (if any), record the hit, pair
+          // the dHash + text with the cache so the next static frame skips, and
+          // skip Tesseract entirely.
+          if (recognizeFastRef.current) {
+            const tf0 = performance.now();
+            const fast = recognizeFastRef.current(region, () => {
+              const c = pair.ocr.getContext('2d', { willReadFrequently: true });
+              const im = c.getImageData(0, 0, pair.ocr.width, pair.ocr.height);
+              return { rgba: im.data, w: pair.ocr.width, h: pair.ocr.height };
+            });
+            if (fast) {
+              fastHits++;
+              if (fast.event) {
+                onEventRef.current?.({ ...fast.event, region: region.id, regionName: region.name });
+              }
+              if (fast.text != null) {
+                textPatch[region.id] = fast.text;
+                lastTextRef.current.set(region.id, fast.text);
+                if (roiHash) lastHashRef.current.set(region.id, roiHash);
+              }
+              latencyPatch[region.id] = Math.round(performance.now() - tf0);
+              continue;
+            }
+          }
+
           const t0 = performance.now();
           try {
             const { data } = await worker.recognize(pair.ocr);
@@ -611,6 +648,7 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
           setRegionLatency((prev) => ({ ...prev, ...latencyPatch }));
           setRegionText((prev) => ({ ...prev, ...textPatch }));
           if (skipped) setLastSkipped((prev) => prev + skipped);
+          if (fastHits) setFastPathHits((prev) => prev + fastHits);
         }
       }
       await new Promise((r) => setTimeout(r, intervalRef.current));
@@ -633,8 +671,22 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
     } catch (_) { return null; }
   }, []);
 
+  // Read the BINARIZED ocr canvas for a region (what DigitMatcher matches on),
+  // as opposed to getRegionPixels' full-colour source. Same-frame within a pass
+  // because Phase 1 binarizes every region's ocr canvas before Phase 2 runs.
+  const getRegionOcrPixels = React.useCallback((regionId) => {
+    const pair = canvasMapRef.current.get(regionId);
+    if (!pair || !pair.ocr) return null;
+    const w = pair.ocr.width, h = pair.ocr.height;
+    try {
+      const ctx = pair.ocr.getContext('2d', { willReadFrequently: true });
+      const img = ctx.getImageData(0, 0, w, h);
+      return { imageData: img.data, w, h };
+    } catch (_) { return null; }
+  }, []);
+
   return { status, error, latency, regionText, regionLatency, videoSize, stream,
-           lastSkipped, start, stop, getRegionPixels };
+           lastSkipped, fastPathHits, start, stop, getRegionPixels, getRegionOcrPixels };
 }
 
 window.useLiveOCR = useLiveOCR;
