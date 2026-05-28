@@ -4,20 +4,15 @@
   <meta charset="utf-8" />
   <title>Live OCR Test</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css" />
-  <link rel="stylesheet" href="live-ocr-test.css" />
-
-  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-  <script src="engine.js"></script>
-  <script src="capture-queue.js"></script>
+  <!-- All assets are bundled locally by `npm run build`. No CDN tags: React,
+       ReactDOM, Tesseract.js and the Inter/JetBrains Mono fonts are compiled
+       into dist/app.{js,css}. Babel-in-browser is gone — JSX is transformed at
+       build time. The integrity="" values below are filled in by
+       scripts/inject-sri.mjs; do not edit them by hand. -->
+  <link rel="stylesheet" href="dist/app.css" integrity="sha384-B9ujYBiwUTWqCJug2wgpKq+F8UxRGD/VZsNZngL7ft+FkK/QyqqfpBLEWP4D3MId" crossorigin="anonymous"><!-- SRI:app.css -->
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" src="live-ocr.jsx"></script>
-  <script type="text/babel" src="live-ocr-test.jsx"></script>
+  <script defer src="dist/app.js" integrity="sha384-okRXOqKZbL9xSRF52g/INrIHuJGi/Un3FvnplisvEHqJC1ta3zrKg1WplVSUoZV5" crossorigin="anonymous"></script><!-- SRI:app.js -->
 </body>
 </html>

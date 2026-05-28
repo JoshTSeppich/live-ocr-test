@@ -1,0 +1,21 @@
+/* styles-entry.css — single CSS entry esbuild compiles into dist/app.css.
+ *
+ * Replaces the CDN Google Fonts <link> with bundled @fontsource packages so
+ * the page loads with zero network requests. We import only the LATIN subset
+ * at the four weights the design uses (400/500/600/700) for each family;
+ * pulling the full multi-subset CSS would inline cyrillic/greek/vietnamese
+ * faces we never render. esbuild's `dataurl` loader inlines each .woff2/.woff
+ * directly into app.css, so there are no sidecar font files to ship. */
+
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+@import "@fontsource/jetbrains-mono/latin-600.css";
+@import "@fontsource/jetbrains-mono/latin-700.css";
+
+/* The app's own stylesheets, in the same order the HTML loaded them. */
+@import "../styles.css";
+@import "../live-ocr-test.css";
