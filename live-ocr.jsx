@@ -266,6 +266,47 @@ function binarizeInvert(ctx, w, h, threshold) {
   ctx.putImageData(img, 0, 0);
 }
 
+// ── ROI hash-skip cache (Component 2) ───────────────────────────────────────
+// Numeric/turn regions whose pixels are byte-identical pass-to-pass don't need
+// re-recognition. We detect that with a 64-bit difference hash (dHash) of the
+// BINARIZED ocr canvas (not the colour source — colour drift shouldn't force a
+// re-read). Only regions whose NAME matches this pattern are skip-eligible;
+// chat is never skipped (its content matters line-by-line, every pass).
+const SKIP_ELIGIBLE = /pot|stack|bet|to_?call|turn/i;
+
+// dHash64 — downsample `srcCanvas` (w×h) to 9×8 grayscale into the reusable
+// `scratch` canvas, then compare each pixel to its right neighbor: 8 diffs per
+// row × 8 rows = 64 bits. (The prompt calls this an "8×8 dHash"; the 9th column
+// exists only so every row yields 8 horizontal comparisons — canonical dHash.)
+function dHash64(srcCanvas, w, h, scratch) {
+  const DW = 9, DH = 8;
+  const tctx = scratch.getContext('2d', { willReadFrequently: true });
+  tctx.drawImage(srcCanvas, 0, 0, w, h, 0, 0, DW, DH);
+  const d = tctx.getImageData(0, 0, DW, DH).data;
+  const out = new Uint8Array(64);
+  let bit = 0;
+  for (let y = 0; y < DH; y++) {
+    for (let x = 0; x < DW - 1; x++) {
+      const i = (y * DW + x) * 4;
+      const j = (y * DW + (x + 1)) * 4;
+      // Grayscale via max(R,G,B) — the same V channel binarizeInvert thresholds
+      // on. On a binarized canvas R=G=B already, so this is exact.
+      const gi = d[i] > d[i+1] ? (d[i] > d[i+2] ? d[i] : d[i+2]) : (d[i+1] > d[i+2] ? d[i+1] : d[i+2]);
+      const gj = d[j] > d[j+1] ? (d[j] > d[j+2] ? d[j] : d[j+2]) : (d[j+1] > d[j+2] ? d[j+1] : d[j+2]);
+      out[bit++] = gi > gj ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+// Hamming distance between two 64-bit dHashes. Distance 0 == identical pixels.
+function hamming64(a, b) {
+  if (!a || !b || a.length !== b.length) return 64;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+  return d;
+}
+
 // useLiveOCR — owns the stream + worker lifecycle. Accepts an array of
 // `regions`, each {id, name, x, y, w, h} as fractions of the video. Each
 // region is OCR'd sequentially per pass and emits events tagged with region.id.
@@ -280,12 +321,17 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
   const [regionLatency, setRegionLatency] = React.useState({}); // {id: ms}
   const [videoSize, setVideoSize] = React.useState(null);
   const [stream, setStream] = React.useState(null);
+  const [lastSkipped, setLastSkipped] = React.useState(0);     // cumulative ROI hash-skips
 
   const streamRef = React.useRef(null);
   const videoRef  = React.useRef(null);
   const workerRef = React.useRef(null);
   const canvasMapRef = React.useRef(new Map()); // region.id -> OffscreenCanvas
   const seenMapRef   = React.useRef(new Map()); // region.id -> Set<dedupe key>
+  const lastHashRef  = React.useRef(new Map()); // region.id -> Uint8Array(64) dHash
+  const lastTextRef  = React.useRef(new Map()); // region.id -> last OCR text (reused on skip)
+  const regionGeomRef = React.useRef(new Map()); // region.id -> bbox sig (invalidates cache on move)
+  const dhashScratchRef = React.useRef(null);   // reusable 9×8 downsample canvas
   const cancelRef = React.useRef(false);
 
   // Held in refs so the recognize loop reads fresh values without re-binding.
@@ -359,12 +405,16 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
     workerRef.current = null;
     canvasMapRef.current = new Map();
     seenMapRef.current = new Map();
+    lastHashRef.current = new Map();
+    lastTextRef.current = new Map();
+    regionGeomRef.current = new Map();
     setStream(null);
     setStatus('idle');
     setLatency(null);
     setRegionText({});
     setRegionLatency({});
     setVideoSize(null);
+    setLastSkipped(0);
   }, []);
 
   const loop = async () => {
@@ -377,8 +427,10 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
       const regs = regionsRef.current || [];
       if (vw && vh && regs.length) {
         let totalMs = 0;
+        let skipped = 0;
         const latencyPatch = {};
         const textPatch = {};
+        if (!dhashScratchRef.current) dhashScratchRef.current = new OffscreenCanvas(9, 8);
 
         // ── PHASE 1: draw all source + preprocessed canvases from the SAME
         // video frame, BEFORE any (slow) OCR pass runs. This guarantees that
@@ -388,6 +440,15 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
         const prepared = [];
         for (const region of regs) {
           if (cancelRef.current) break;
+          // Invalidate the hash-skip cache if this region's bbox changed (a
+          // move or resize keeps the same id but the pixels are now different,
+          // so a stale hash must not be reused as a skip → stale text).
+          const geomSig = `${region.x},${region.y},${region.w},${region.h}`;
+          if (regionGeomRef.current.get(region.id) !== geomSig) {
+            regionGeomRef.current.set(region.id, geomSig);
+            lastHashRef.current.delete(region.id);
+            lastTextRef.current.delete(region.id);
+          }
           const rx = Math.min(1, Math.max(0, region.x || 0));
           const ry = Math.min(1, Math.max(0, region.y || 0));
           const rw = Math.min(1 - rx, Math.max(0.01, region.w || 0));
@@ -425,6 +486,26 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
         // from inside an event handler sees a coherent snapshot.
         for (const { region, pair, srcCtx, scale } of prepared) {
           if (cancelRef.current) break;
+
+          // ── ROI hash-skip (Component 2) ──────────────────────────────────
+          // For skip-eligible (numeric/turn) regions, dHash the binarized ocr
+          // canvas. If it's byte-identical to the last SUCCESSFULLY recognized
+          // frame (Hamming distance 0), the pixels didn't change — skip the
+          // recognizer entirely this pass and reuse the last emitted value.
+          // Chat and card regions never skip. `roiHash` is paired with the
+          // cached text on success below, so the two never drift apart.
+          let roiHash = null;
+          if (SKIP_ELIGIBLE.test(region.name || '')) {
+            roiHash = dHash64(pair.ocr, pair.ocr.width, pair.ocr.height, dhashScratchRef.current);
+            const prev = lastHashRef.current.get(region.id);
+            if (prev && hamming64(roiHash, prev) === 0) {
+              skipped++;
+              const cachedText = lastTextRef.current.get(region.id);
+              if (cachedText != null) textPatch[region.id] = cachedText;
+              latencyPatch[region.id] = 0;
+              continue;
+            }
+          }
           const t0 = performance.now();
           try {
             const { data } = await worker.recognize(pair.ocr);
@@ -439,6 +520,10 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
             // helper to convert them back.
             const correctedText = injectColorSuits(data, srcCtx, scale);
             textPatch[region.id] = correctedText;
+            // Pair the cached text with the hash of the frame it came from, so a
+            // future skip reuses a value that actually matches those pixels.
+            lastTextRef.current.set(region.id, correctedText);
+            if (roiHash) lastHashRef.current.set(region.id, roiHash);
 
             // Per-region dedupe.
             let seen = seenMapRef.current.get(region.id);
@@ -525,6 +610,7 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
           setLatency(totalMs);
           setRegionLatency((prev) => ({ ...prev, ...latencyPatch }));
           setRegionText((prev) => ({ ...prev, ...textPatch }));
+          if (skipped) setLastSkipped((prev) => prev + skipped);
         }
       }
       await new Promise((r) => setTimeout(r, intervalRef.current));
@@ -548,7 +634,7 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
   }, []);
 
   return { status, error, latency, regionText, regionLatency, videoSize, stream,
-           start, stop, getRegionPixels };
+           lastSkipped, start, stop, getRegionPixels };
 }
 
 window.useLiveOCR = useLiveOCR;
