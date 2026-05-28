@@ -10,6 +10,7 @@
 //   evaluate7(cards7)            // hand rank, higher = better
 //   canonicalize(twoCards)       // -> 'AKs' | 'AKo' | 'TT'
 //   MultiSignatureMatcher  CardTemplateMatcher
+//   DigitMatcher (closed numeric/symbol set; 8×12 grid; recognizeNumeric)
 //   HandHistoryRecorder
 //   normalizeCard / parseCardList / regionIdForCardCount
 //   serializeTemplates / deserializeTemplates
@@ -380,6 +381,329 @@ class MultiSignatureMatcher {
   list() { return [...this.templates.keys()].sort(); }
 }
 
+// ─── digit matcher (Component 1) ──────────────────────────────────────────
+// A second hash-based matcher, specialized for the closed numeric/symbol set
+// that fixed-font poker readouts use: digits, decimal/grouping marks, the
+// dollar sign, and the BB suffix. It mirrors MultiSignatureMatcher's three-
+// signature weighted-Hamming design (MATCHER_SPEC §3) but is tuned for narrow
+// glyphs: an 8×12 grid (vs the card matcher's 16×24) and a higher confidence
+// bar (≥0.85 vs cards' ≥0.75 — digits are simpler, so we can demand more).
+//
+// It does NOT replace Tesseract. recognizeNumeric() is a fast pre-Tesseract
+// path for numeric fields; on any below-threshold glyph it returns text=null
+// and the caller falls back to the 250ms Tesseract loop.
+
+const DIGIT_W = 8;
+const DIGIT_H = 12;
+const DIGIT_BITS = DIGIT_W * DIGIT_H; // 96
+const DIGIT_CONF_THRESHOLD = 0.85;
+const DIGIT_SYMBOLS = '0123456789.,$B';
+
+// max(R,G,B) — the HSV "Value" channel — at byte index i. Same channel the
+// card hashes use; survives pure-red ink that luminance would drop.
+function _maxV(rgba, i) {
+  const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+  return r > g ? (r > b ? r : b) : (g > b ? g : b);
+}
+
+// Grid-parameterized versions of the three card hashes. The card hash
+// functions hardcode TPL_W/TPL_H; these take the grid size so the digit
+// matcher can run them at 8×12. The algorithms are identical to
+// hashCardRGBA / hashCardEdge / hashCardColor — only the grid differs — so
+// digit and card recognition share their proven behavior without the card
+// path being touched.
+function _gridBrightnessHash(rgba, w, h, gw, gh) {
+  const bits = gw * gh;
+  const vals = new Float32Array(bits);
+  let sum = 0;
+  for (let ty = 0; ty < gh; ty++) {
+    for (let tx = 0; tx < gw; tx++) {
+      const sx0 = Math.floor(tx * w / gw);
+      const sx1 = Math.max(sx0 + 1, Math.floor((tx + 1) * w / gw));
+      const sy0 = Math.floor(ty * h / gh);
+      const sy1 = Math.max(sy0 + 1, Math.floor((ty + 1) * h / gh));
+      let s = 0, n = 0;
+      for (let y = sy0; y < sy1; y++) {
+        for (let x = sx0; x < sx1; x++) {
+          s += _maxV(rgba, (y * w + x) * 4);
+          n++;
+        }
+      }
+      const v = n ? s / n : 0;
+      vals[ty * gw + tx] = v;
+      sum += v;
+    }
+  }
+  const mean = sum / bits;
+  const out = new Uint8Array(bits);
+  for (let i = 0; i < bits; i++) out[i] = vals[i] > mean ? 1 : 0;
+  return out;
+}
+
+function _gridEdgeHash(rgba, w, h, gw, gh) {
+  const bits = gw * gh;
+  const cells = new Float32Array(bits);
+  for (let ty = 0; ty < gh; ty++) {
+    for (let tx = 0; tx < gw; tx++) {
+      const sx0 = Math.floor(tx * w / gw);
+      const sx1 = Math.max(sx0 + 1, Math.floor((tx + 1) * w / gw));
+      const sy0 = Math.floor(ty * h / gh);
+      const sy1 = Math.max(sy0 + 1, Math.floor((ty + 1) * h / gh));
+      let acc = 0, n = 0;
+      for (let y = sy0; y < sy1 - 1; y++) {
+        for (let x = sx0; x < sx1 - 1; x++) {
+          const lum = _maxV(rgba, (y * w + x) * 4);
+          const lR  = _maxV(rgba, (y * w + (x + 1)) * 4);
+          const lD  = _maxV(rgba, ((y + 1) * w + x) * 4);
+          acc += Math.abs(lum - lR) + Math.abs(lum - lD);
+          n++;
+        }
+      }
+      cells[ty * gw + tx] = n ? acc / n : 0;
+    }
+  }
+  let total = 0;
+  for (let i = 0; i < bits; i++) total += cells[i];
+  const mean = total / bits;
+  const out = new Uint8Array(bits);
+  for (let i = 0; i < bits; i++) out[i] = cells[i] > mean ? 1 : 0;
+  return out;
+}
+
+function _gridColorHash(rgba, w, h, gw, gh) {
+  const bits = gw * gh;
+  const out = new Uint8Array(bits);
+  for (let ty = 0; ty < gh; ty++) {
+    for (let tx = 0; tx < gw; tx++) {
+      const sx0 = Math.floor(tx * w / gw);
+      const sx1 = Math.max(sx0 + 1, Math.floor((tx + 1) * w / gw));
+      const sy0 = Math.floor(ty * h / gh);
+      const sy1 = Math.max(sy0 + 1, Math.floor((ty + 1) * h / gh));
+      let red = 0, light = 0;
+      for (let y = sy0; y < sy1; y++) {
+        for (let x = sx0; x < sx1; x++) {
+          const i = (y * w + x) * 4;
+          const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+          if (r > 130 && g < 110 && b < 110) red++;
+          else if (r > 160 && g > 160 && b > 160) light++;
+        }
+      }
+      out[ty * gw + tx] = red > light ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function hashDigitRGBA(rgba, w, h)  { return _gridBrightnessHash(rgba, w, h, DIGIT_W, DIGIT_H); }
+function hashDigitEdge(rgba, w, h)  { return _gridEdgeHash(rgba, w, h, DIGIT_W, DIGIT_H); }
+function hashDigitColor(rgba, w, h) { return _gridColorHash(rgba, w, h, DIGIT_W, DIGIT_H); }
+
+// Copy a column band [x0, x1) (full height) of an RGBA buffer into a new,
+// tightly-packed RGBA buffer. Used to hand each segmented glyph to match().
+function _cropColumns(rgba, w, h, x0, x1) {
+  const cw = x1 - x0;
+  const out = new Uint8Array(cw * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < cw; x++) {
+      const si = (y * w + (x0 + x)) * 4;
+      const di = (y * cw + x) * 4;
+      out[di] = rgba[si]; out[di + 1] = rgba[si + 1];
+      out[di + 2] = rgba[si + 2]; out[di + 3] = rgba[si + 3];
+    }
+  }
+  return out;
+}
+
+class DigitMatcher {
+  constructor(storageKey) {
+    this.key = storageKey || 'pp-digit-templates-v1';
+    this.threshold = DIGIT_CONF_THRESHOLD;
+    this.templates = new Map(); // symbol -> {brightness, edge, color}
+    this._load();
+  }
+  _load() {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(this.key);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const entries = parsed && parsed.symbols ? parsed.symbols : parsed;
+      for (const [k, v] of Object.entries(entries || {})) {
+        if (v && v.brightness && v.edge && v.color) {
+          this.templates.set(k, {
+            brightness: new Uint8Array(v.brightness),
+            edge: new Uint8Array(v.edge),
+            color: new Uint8Array(v.color),
+          });
+        }
+      }
+    } catch (_) {}
+  }
+  _save() {
+    if (typeof localStorage === 'undefined') return;
+    try { localStorage.setItem(this.key, this.serialize()); } catch (_) {}
+  }
+  teach(symbol, rgba, w, h) {
+    if (!symbol || !rgba) return false;
+    this.templates.set(symbol, {
+      brightness: hashDigitRGBA(rgba, w, h),
+      edge: hashDigitEdge(rgba, w, h),
+      color: hashDigitColor(rgba, w, h),
+    });
+    this._save();
+    return true;
+  }
+  match(rgba, w, h) {
+    if (this.templates.size === 0) return null;
+    const probe = {
+      brightness: hashDigitRGBA(rgba, w, h),
+      edge: hashDigitEdge(rgba, w, h),
+      color: hashDigitColor(rgba, w, h),
+    };
+    let best = null, bestDist = Infinity;
+    for (const [symbol, sig] of this.templates) {
+      const dB = hammingDistance(probe.brightness, sig.brightness);
+      const dC = hammingDistance(probe.color,      sig.color);
+      const dE = hammingDistance(probe.edge,       sig.edge);
+      const combined = 0.5 * dB + 0.3 * dC + 0.2 * dE;
+      if (combined < bestDist) { bestDist = combined; best = symbol; }
+    }
+    return best == null ? null
+      : { symbol: best, distance: bestDist, confidence: 1 - bestDist / DIGIT_BITS };
+  }
+  clear() { this.templates.clear(); this._save(); }
+  forget(symbol) { this.templates.delete(symbol); this._save(); }
+  get size() { return this.templates.size; }
+  list() { return [...this.templates.keys()].sort(); }
+
+  // Read a multi-symbol numeric strip. Segments the ROI into glyph columns by
+  // vertical dark-pixel projection on the binarized input, then match()es each
+  // box. Returns { text, confidence, unmatched, boxes }:
+  //   - confidence: the minimum confidence across boxes (0 if none)
+  //   - unmatched:  count of boxes below this.threshold (or with no match)
+  //   - text:       the concatenated symbols, or null if unmatched > 0 (or no
+  //                 box found) — null is the caller's signal to fall back to
+  //                 Tesseract.
+  // opts: { threshold, inkThreshold, minColInkFrac, minBoxWidth }.
+  // Segment a numeric strip into glyph boxes by vertical dark-pixel projection
+  // on the binarized input. Returns [{ x0, x1, rgba, w, h }] — each box's pixels
+  // cropped out, ready for match() or teach(). Shared by recognizeNumeric (to
+  // read) and the teach UI (to label each box against a ground-truth string).
+  segment(rgba, w, h, opts) {
+    opts = opts || {};
+    const inkThreshold = opts.inkThreshold != null ? opts.inkThreshold : 128;
+    const minColInkFrac = opts.minColInkFrac != null ? opts.minColInkFrac : 0.04;
+    const minBoxWidth = opts.minBoxWidth != null ? opts.minBoxWidth : 2;
+
+    // A column is "ink" when enough of its pixels are dark (V channel below
+    // inkThreshold — binarized text is dark on a light field).
+    const minInk = Math.max(1, Math.floor(minColInkFrac * h));
+    const colInk = new Int32Array(w);
+    for (let x = 0; x < w; x++) {
+      let c = 0;
+      for (let y = 0; y < h; y++) if (_maxV(rgba, (y * w + x) * 4) < inkThreshold) c++;
+      colInk[x] = c;
+    }
+
+    // Runs of ink columns are glyph boxes; blank columns are gaps.
+    const boxes = [];
+    let start = -1;
+    const flush = (x0, x1) => {
+      if (x1 - x0 < minBoxWidth) return;
+      boxes.push({ x0, x1, rgba: _cropColumns(rgba, w, h, x0, x1), w: x1 - x0, h });
+    };
+    for (let x = 0; x < w; x++) {
+      const isInk = colInk[x] >= minInk;
+      if (isInk && start < 0) start = x;
+      else if (!isInk && start >= 0) { flush(start, x); start = -1; }
+    }
+    if (start >= 0) flush(start, w);
+    return boxes;
+  }
+
+  recognizeNumeric(rgba, w, h, opts) {
+    opts = opts || {};
+    const threshold = opts.threshold != null ? opts.threshold : this.threshold;
+    const segBoxes = this.segment(rgba, w, h, opts);
+
+    const boxes = [];
+    let minConf = Infinity, unmatched = 0;
+    for (const b of segBoxes) {
+      const res = this.match(b.rgba, b.w, b.h);
+      const conf = res ? res.confidence : 0;
+      const symbol = res && conf >= threshold ? res.symbol : null;
+      if (symbol == null) unmatched++;
+      if (conf < minConf) minConf = conf;
+      boxes.push({ x0: b.x0, x1: b.x1, symbol: res ? res.symbol : null, confidence: conf });
+    }
+
+    if (boxes.length === 0) return { text: null, confidence: 0, unmatched: 0, boxes };
+    const text = unmatched > 0 ? null : boxes.map((b) => b.symbol).join('');
+    return { text, confidence: minConf === Infinity ? 0 : minConf, unmatched, boxes };
+  }
+
+  // schema v1: { schema_version, captured_at, grid:[w,h], bits, symbols }.
+  // symbols is keyed by symbol; each value has brightness/edge/color as plain
+  // number arrays of length DIGIT_BITS (96) containing only 0/1.
+  serialize() {
+    const symbols = {};
+    for (const [k, v] of this.templates) {
+      symbols[k] = {
+        brightness: Array.from(v.brightness),
+        edge: Array.from(v.edge),
+        color: Array.from(v.color),
+      };
+    }
+    return JSON.stringify({
+      schema_version: 1,
+      captured_at: new Date().toISOString(),
+      grid: [DIGIT_W, DIGIT_H],
+      bits: DIGIT_BITS,
+      template_count: this.templates.size,
+      symbols,
+    });
+  }
+  // Replace this matcher's templates from a serialized blob (JSON string or the
+  // parsed object). Strict: throws on a bad schema, unknown symbol, wrong-length
+  // signature, or non-binary value — a corrupt blob is worse than an empty one.
+  deserialize(payload) {
+    const obj = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    if (!obj || typeof obj !== 'object') throw new Error('invalid digit template blob');
+    if (obj.schema_version !== 1) {
+      throw new Error('schema_version must be 1, got ' + obj.schema_version);
+    }
+    const symbols = obj.symbols;
+    if (!symbols || typeof symbols !== 'object') {
+      throw new Error('symbols field missing or not an object');
+    }
+    const next = new Map();
+    for (const [sym, v] of Object.entries(symbols)) {
+      if (DIGIT_SYMBOLS.indexOf(sym) < 0) throw new Error('unknown digit symbol: ' + sym);
+      if (!v || typeof v !== 'object') throw new Error('invalid template at ' + sym + ': not an object');
+      for (const field of ['brightness', 'edge', 'color']) {
+        const arr = v[field];
+        if (!Array.isArray(arr)) throw new Error('invalid template at ' + sym + ': ' + field + ' not array');
+        if (arr.length !== DIGIT_BITS) {
+          throw new Error('invalid template at ' + sym + ': ' + field + ' length ' + arr.length + ' (expected ' + DIGIT_BITS + ')');
+        }
+        for (let i = 0; i < arr.length; i++) {
+          if (arr[i] !== 0 && arr[i] !== 1) {
+            throw new Error('invalid template at ' + sym + ': ' + field + '[' + i + '] = ' + arr[i] + ' (must be 0 or 1)');
+          }
+        }
+      }
+      next.set(sym, {
+        brightness: new Uint8Array(v.brightness),
+        edge: new Uint8Array(v.edge),
+        color: new Uint8Array(v.color),
+      });
+    }
+    this.templates = next;
+    this._save();
+    return { total: next.size };
+  }
+}
+
 // ─── hand history recorder ────────────────────────────────────────────────
 // Captures every parsed hand to localStorage with full event sequence.
 // Bounded sliding window (default 200 hands). Queryable by villain.
@@ -547,6 +871,9 @@ return {
   CardTemplateMatcher, hashCardRGBA, hashCardEdge, hashCardColor,
   hammingDistance, TPL_W, TPL_H, TPL_BITS,
   MultiSignatureMatcher,
+  // Digit/symbol matcher + its hashes + grid constants (Component 1)
+  DigitMatcher, hashDigitRGBA, hashDigitEdge, hashDigitColor,
+  DIGIT_W, DIGIT_H, DIGIT_BITS, DIGIT_CONF_THRESHOLD, DIGIT_SYMBOLS,
   // Card-code helpers + template export/import (additive)
   normalizeCard, parseCardList, regionIdForCardCount,
   serializeTemplates, deserializeTemplates,

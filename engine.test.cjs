@@ -1,4 +1,5 @@
-// engine.test.js — smoke tests for decision engine. Run: node engine.test.js
+// engine.test.cjs — smoke tests for decision engine. Run: node engine.test.cjs
+// (.cjs so it stays CommonJS under package.json "type":"module".)
 // Exits non-zero if any assertion fails.
 
 const E = require('./engine.js');
@@ -498,6 +499,211 @@ ok('replace strategy clears existing first', (() => {
   return ok2;
 })());
 
+
+// ── digit matcher (Component 1) ────────────────────────────────────────────
+log('\n== DIGIT MATCHER ==');
+
+// A synthetic narrow glyph: dark ink on a light field, deterministic per seed.
+// A forced mid-row of ink guarantees every column has at least one dark pixel,
+// so a glyph reads as one contiguous box under the dark-column projection.
+function digitGlyph(w, h, seed) {
+  return makeRGBA(w, h, (x, y) => {
+    const ink = (y === (h >> 1)) || (((x * 7 + y * 13 + seed * 29) % 5) < 2);
+    return ink ? [12, 12, 12] : [244, 244, 244];
+  });
+}
+
+// A horizontal strip of glyphs (one per seed) separated by blank white gaps.
+// Each glyph band reproduces digitGlyph(glyphW, h, seed) pixel-for-pixel, so a
+// box extracted from band k hashes identically to the standalone glyph k.
+function digitStrip(seeds, glyphW, gap, h) {
+  const n = seeds.length;
+  const w = n * glyphW + (n - 1) * gap;
+  const out = makeRGBA(w, h, () => [244, 244, 244]); // all white
+  seeds.forEach((seed, k) => {
+    const x0 = k * (glyphW + gap);
+    for (let y = 0; y < h; y++) {
+      for (let gx = 0; gx < glyphW; gx++) {
+        const ink = (y === (h >> 1)) || (((gx * 7 + y * 13 + seed * 29) % 5) < 2);
+        const i = (y * w + (x0 + gx)) * 4;
+        const v = ink ? 12 : 244;
+        out[i] = v; out[i + 1] = v; out[i + 2] = v; out[i + 3] = 255;
+      }
+    }
+  });
+  return { rgba: out, w, h };
+}
+
+// hashDigit* output is the right length (8×12 = 96, not the card 384).
+ok('digit hash length == DIGIT_BITS (' + E.DIGIT_BITS + ')', (() => {
+  const g = digitGlyph(20, 30, 3);
+  return E.hashDigitRGBA(g, 20, 30).length === E.DIGIT_BITS
+      && E.DIGIT_BITS === 96 && E.DIGIT_W === 8 && E.DIGIT_H === 12;
+})());
+
+// teach → match round-trip returns the same symbol at confidence 1.0.
+ok('digit teach then match returns same symbol with confidence 1.0', (() => {
+  const m = new E.DigitMatcher('test:digit-roundtrip');
+  m.clear();
+  const g = digitGlyph(24, 36, 7);
+  m.teach('7', g, 24, 36);
+  const res = m.match(g, 24, 36);
+  m.clear();
+  return res && res.symbol === '7' && res.distance === 0 && res.confidence === 1.0;
+})());
+
+// With several templates, match picks the closest (each self-matches).
+ok('digit match picks nearest symbol among many', (() => {
+  const m = new E.DigitMatcher('test:digit-nearest');
+  m.clear();
+  const defs = { '3': 3, '8': 17, '0': 31, '$': 44 };
+  for (const [sym, seed] of Object.entries(defs)) m.teach(sym, digitGlyph(24, 36, seed), 24, 36);
+  let allSelf = true;
+  for (const [sym, seed] of Object.entries(defs)) {
+    const r = m.match(digitGlyph(24, 36, seed), 24, 36);
+    if (!r || r.symbol !== sym) allSelf = false;
+  }
+  m.clear();
+  return allSelf;
+})());
+
+// serialize → deserialize round-trips templates exactly.
+ok('digit serialize/deserialize round-trips', (() => {
+  const src = new E.DigitMatcher('test:digit-ser-src');
+  src.clear();
+  for (const [sym, seed] of [['1', 5], ['.', 12], ['$', 25], ['B', 40]]) {
+    src.teach(sym, digitGlyph(24, 36, seed), 24, 36);
+  }
+  const blob = src.serialize();
+  const dst = new E.DigitMatcher('test:digit-ser-dst');
+  dst.clear();
+  const res = dst.deserialize(blob);
+  let same = res.total === 4 && dst.size === 4;
+  for (const sym of ['1', '.', '$', 'B']) {
+    const a = src.templates.get(sym), b = dst.templates.get(sym);
+    if (!a || !b) { same = false; continue; }
+    if (!arraysEqual(a.brightness, b.brightness)) same = false;
+    if (!arraysEqual(a.edge,       b.edge))       same = false;
+    if (!arraysEqual(a.color,      b.color))      same = false;
+  }
+  src.clear(); dst.clear();
+  return same;
+})());
+
+// deserialize rejects an unknown symbol key (strict, like the card path).
+ok('digit deserialize rejects unknown symbol', (() => {
+  const m = new E.DigitMatcher('test:digit-badsym');
+  const bad = {
+    schema_version: 1, grid: [8, 12], bits: 96, symbols: {
+      'Z': { brightness: new Array(E.DIGIT_BITS).fill(0), edge: new Array(E.DIGIT_BITS).fill(0), color: new Array(E.DIGIT_BITS).fill(0) },
+    },
+  };
+  try { m.deserialize(bad); return false; }
+  catch (e) { m.clear(); return /unknown digit symbol/.test(e.message); }
+})());
+
+// deserialize rejects a wrong-length signature.
+ok('digit deserialize rejects wrong-length signature', (() => {
+  const m = new E.DigitMatcher('test:digit-badlen');
+  const bad = {
+    schema_version: 1, grid: [8, 12], bits: 96, symbols: {
+      '4': { brightness: new Array(10).fill(0), edge: new Array(E.DIGIT_BITS).fill(0), color: new Array(E.DIGIT_BITS).fill(0) },
+    },
+  };
+  try { m.deserialize(bad); return false; }
+  catch (e) { m.clear(); return /length/.test(e.message); }
+})());
+
+// recognizeNumeric segments a multi-symbol strip and reads it back.
+ok('recognizeNumeric segments and reads a synthetic strip', (() => {
+  const m = new E.DigitMatcher('test:digit-strip');
+  m.clear();
+  const symbols = ['3', '.', '2', '0'];
+  const seeds   = [3, 12, 19, 31];
+  const glyphW = 16, gap = 6, h = 30;
+  symbols.forEach((sym, k) => m.teach(sym, digitGlyph(glyphW, h, seeds[k]), glyphW, h));
+  const strip = digitStrip(seeds, glyphW, gap, h);
+  const res = m.recognizeNumeric(strip.rgba, strip.w, strip.h);
+  m.clear();
+  return res && res.boxes.length === 4 && res.unmatched === 0
+      && res.text === '3.20' && res.confidence >= 0.999;
+})());
+
+// segment() finds one box per glyph with correct column ranges and crop dims.
+ok('digit segment() splits a strip into per-glyph boxes', (() => {
+  const m = new E.DigitMatcher('test:digit-segment');
+  const seeds = [3, 12, 19, 31];
+  const glyphW = 16, gap = 6, h = 30;
+  const strip = digitStrip(seeds, glyphW, gap, h);
+  const boxes = m.segment(strip.rgba, strip.w, strip.h);
+  if (boxes.length !== 4) return false;
+  for (let k = 0; k < 4; k++) {
+    const expX0 = k * (glyphW + gap);
+    if (boxes[k].x0 !== expX0 || boxes[k].x1 !== expX0 + glyphW) return false;
+    if (boxes[k].w !== glyphW || boxes[k].h !== h) return false;
+    if (boxes[k].rgba.length !== glyphW * h * 4) return false;
+  }
+  return true;
+})());
+
+// A glyph far from every template (per-pixel inverse) stays below threshold,
+// so recognizeNumeric returns text=null — the Tesseract fallback signal.
+ok('recognizeNumeric returns null text when a box is below threshold', (() => {
+  const m = new E.DigitMatcher('test:digit-belowthresh');
+  m.clear();
+  const glyphW = 16, h = 30;
+  const taught = digitGlyph(glyphW, h, 9);
+  m.teach('5', taught, glyphW, h);
+  // Per-pixel inverse of the taught glyph: brightness pattern flips, so the
+  // brightness Hamming distance is large and confidence drops below 0.85.
+  const probe = new Uint8Array(taught.length);
+  for (let i = 0; i < taught.length; i += 4) {
+    probe[i] = 255 - taught[i]; probe[i + 1] = 255 - taught[i + 1];
+    probe[i + 2] = 255 - taught[i + 2]; probe[i + 3] = 255;
+  }
+  const res = m.recognizeNumeric(probe, glyphW, h);
+  m.clear();
+  return res && res.text === null && res.unmatched >= 1 && res.confidence < 0.85;
+})());
+
+// End-to-end fast-path: teach a "$3.20" pot strip glyph-by-glyph (as the teach
+// UI does via segment()), then read a fresh same-pattern strip (as the router
+// does via recognizeNumeric) and shape the pot event the way recognizeFast
+// does. Proves the teach → recognize → {kind:'pot', dollars} chain.
+ok('fast-path: teach a pot strip then recognize it into a pot dollars value', (() => {
+  const m = new E.DigitMatcher('test:digit-fastpath');
+  m.clear();
+  const gt = '$3.20';
+  const seeds = [40, 3, 12, 19, 31]; // $,3,.,2,0
+  const glyphW = 16, gap = 6, h = 30;
+  // Teach: segment a strip and label each box with the ground-truth symbol.
+  const teachStrip = digitStrip(seeds, glyphW, gap, h);
+  const boxes = m.segment(teachStrip.rgba, teachStrip.w, teachStrip.h);
+  if (boxes.length !== gt.length) { m.clear(); return false; }
+  for (let i = 0; i < boxes.length; i++) m.teach(gt[i], boxes[i].rgba, boxes[i].w, boxes[i].h);
+  // Recognize a fresh strip of the same glyphs (next frame, identical pixels).
+  const readStrip = digitStrip(seeds, glyphW, gap, h);
+  const res = m.recognizeNumeric(readStrip.rgba, readStrip.w, readStrip.h);
+  // Router's event shaping (mirror of parseNumericText in live-ocr-test.jsx).
+  const dollars = res.text == null ? null
+    : parseFloat(res.text.replace(/[$B\s,]/g, ''));
+  m.clear();
+  return res.text === '$3.20' && res.unmatched === 0 && dollars === 3.2;
+})());
+
+// match() on an empty matcher is null; clear()/forget()/size behave.
+ok('digit matcher size/forget/clear/empty-match', (() => {
+  const m = new E.DigitMatcher('test:digit-housekeeping');
+  m.clear();
+  if (m.match(digitGlyph(16, 24, 1), 16, 24) !== null) return false;
+  m.teach('9', digitGlyph(16, 24, 1), 16, 24);
+  m.teach('6', digitGlyph(16, 24, 2), 16, 24);
+  if (m.size !== 2) return false;
+  m.forget('9');
+  if (m.size !== 1 || m.list().join('') !== '6') return false;
+  m.clear();
+  return m.size === 0;
+})());
 
 // ── summary ──────────────────────────────────────────────────────────────
 log('\n== SUMMARY ==');
