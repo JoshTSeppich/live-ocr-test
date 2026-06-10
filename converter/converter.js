@@ -20,10 +20,10 @@
 })(typeof self !== 'undefined' ? self : this, function (req, root) {
   'use strict';
 
-  const Obs = req ? req('./observation.js') : (root && root.PokerObservation);
-  const Frame = req ? req('./frame.js') : (root && root.PokerFrame);
-  const Assembler = req ? req('./assembler.js') : (root && root.PokerAssembler);
-  const Seats = req ? req('./seats.js') : (root && root.PokerSeats);
+  const Obs = (typeof require === 'function') ? require('./observation.js') : (root && root.PokerObservation);
+  const Frame = (typeof require === 'function') ? require('./frame.js') : (root && root.PokerFrame);
+  const Assembler = (typeof require === 'function') ? require('./assembler.js') : (root && root.PokerAssembler);
+  const Seats = (typeof require === 'function') ? require('./seats.js') : (root && root.PokerSeats);
 
   function streetFromCount(n) {
     if (n === 0) return 0; if (n === 3) return 1; if (n === 4) return 2; if (n === 5) return 3;

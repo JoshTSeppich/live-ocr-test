@@ -22,7 +22,7 @@
 })(typeof self !== 'undefined' ? self : this, function (req, root) {
   'use strict';
 
-  const Regions = req ? req('./regions.js') : (root && root.PokerRegions);
+  const Regions = (typeof require === 'function') ? require('./regions.js') : (root && root.PokerRegions);
 
   // Slice a {rgba,w,h} crop into n even vertical cells (engine cardCellsFromRegion
   // style: floor(w/n), last cell gets the remainder).

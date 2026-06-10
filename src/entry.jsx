@@ -8,7 +8,12 @@
 //   3. live-ocr.jsx      — defines window.useLiveOCR & friends (needs React)
 //   4. live-ocr-test.jsx — the React UI; calls ReactDOM.createRoot(...) at its
 //                          end, mounting the app into <div id="root">
+//   5. converter-globals.js — bundles the converter modules (each self-registers
+//                          on window) and mounts the floating Advisor / Capture-
+//                          Harness panel. Last, so window.useLiveOCR + PokerEngine
+//                          are already present.
 import './styles-entry.css';
 import './setup-globals.js';
 import '../live-ocr.jsx';
 import '../live-ocr-test.jsx';
+import './converter-globals.js';

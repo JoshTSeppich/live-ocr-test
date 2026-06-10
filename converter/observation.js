@@ -28,8 +28,8 @@
   'use strict';
 
   // engine.js for DigitMatcher/MultiSignatureMatcher; regions.js for slots.
-  const Engine = req ? req('../engine.js') : (root && root.PokerEngine);
-  const Regions = req ? req('./regions.js') : (root && root.PokerRegions);
+  const Engine = (typeof require === 'function') ? require('../engine.js') : (root && root.PokerEngine);
+  const Regions = (typeof require === 'function') ? require('./regions.js') : (root && root.PokerRegions);
 
   // ─── measured color masks (per-pixel predicates over rgba at offset i) ─────
   // Yellow/gold puck (§0.8). Validated: fires on the puck disc, and on the gold

@@ -19,8 +19,8 @@
 })(typeof self !== 'undefined' ? self : this, function (req, root) {
   'use strict';
 
-  const Seats = req ? req('./seats.js') : (root && root.PokerSeats);
-  const Regions = req ? req('./regions.js') : (root && root.PokerRegions);
+  const Seats = (typeof require === 'function') ? require('./seats.js') : (root && root.PokerSeats);
+  const Regions = (typeof require === 'function') ? require('./regions.js') : (root && root.PokerRegions);
 
   const DEFAULTS = {
     BB_CHIPS: 100,                 // §3: 1 BB = 100 chips → 1.5 BB = 150

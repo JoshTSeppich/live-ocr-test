@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : this, function (req, root) {
   'use strict';
 
-  const Assembler = req ? req('./assembler.js') : (root && root.PokerAssembler);
+  const Assembler = (typeof require === 'function') ? require('./assembler.js') : (root && root.PokerAssembler);
 
   const DEFAULTS = {
     url: 'ws://127.0.0.1:8766',
@@ -41,8 +41,11 @@
       this.backoffMaxMs = opts.backoffMaxMs != null ? opts.backoffMaxMs : DEFAULTS.backoffMaxMs;
       // injectable for tests; default to browser globals
       this._createSocket = opts.createSocket || ((url) => new root.WebSocket(url));
-      this._setTimeout = opts.setTimeout || (typeof setTimeout !== 'undefined' ? setTimeout : null);
-      this._clearTimeout = opts.clearTimeout || (typeof clearTimeout !== 'undefined' ? clearTimeout : null);
+      // Wrap timers in arrows so the native fns keep their global `this` — a bare
+      // `this._setTimeout(...)` would call window.setTimeout with this=BotLink and
+      // throw "Illegal invocation" in the browser (node doesn't care).
+      this._setTimeout = opts.setTimeout || (typeof setTimeout !== 'undefined' ? (fn, ms) => setTimeout(fn, ms) : null);
+      this._clearTimeout = opts.clearTimeout || (typeof clearTimeout !== 'undefined' ? (id) => clearTimeout(id) : null);
 
       this.onAdvice = opts.onAdvice || (() => {});
       this.onError = opts.onError || (() => {});

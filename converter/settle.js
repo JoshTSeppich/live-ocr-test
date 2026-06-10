@@ -29,7 +29,7 @@
 })(typeof self !== 'undefined' ? self : this, function (req, root) {
   'use strict';
 
-  const Regions = req ? req('./regions.js') : (root && root.PokerRegions);
+  const Regions = (typeof require === 'function') ? require('./regions.js') : (root && root.PokerRegions);
 
   const DEFAULTS = { n: 2, settleN: 2, decimals: 2 };
 
