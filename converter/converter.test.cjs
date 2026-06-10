@@ -125,6 +125,50 @@ test('hero bet from stack delta + posted blind, never BC OCR (§0.10)', () => {
   assert.strictEqual(q.current_bets[q.hero_seat], 100, 'hero (BB) committed the 1bb blind, derived not OCR');
 });
 
+// ── hero-bet ground-truth cross-check (§0.10) ───────────────────────────────
+const RD = (v) => ({ value: v, status: 'read', confirmed: true, stable: true });
+const NRstable = { value: null, status: 'no-read', confirmed: false, stable: true };
+const OCCl = { value: null, status: 'occluded', confirmed: false, stable: true };
+
+test('hero-bet cross-check: stack-delta agrees with the bet badge → no warning', () => {
+  const { cv } = makeConverter();
+  cv._heroBetBB = 2.3;
+  assert.strictEqual(cv._heroBetCrossCheck({ heroBetObserved: RD(2.3) }), null);
+});
+
+test('hero-bet cross-check: drift (the 2.30→12.30 trap) → loud warning', () => {
+  const { cv } = makeConverter();
+  cv._heroBetBB = 2.3;
+  const w = cv._heroBetCrossCheck({ heroBetObserved: RD(12.3) });
+  assert.match(w, /HERO-BET DRIFT/);
+  assert.match(w, /stack-delta=2.30bb vs bet-badge=12.30bb/);
+});
+
+test('hero-bet cross-check: settled-empty badge reads as 0 (agrees when heroBet 0)', () => {
+  const { cv } = makeConverter();
+  cv._heroBetBB = 0;
+  assert.strictEqual(cv._heroBetCrossCheck({ heroBetObserved: NRstable }), null);
+});
+
+test('hero-bet cross-check: empty badge but nonzero stack-delta → warning', () => {
+  const { cv } = makeConverter();
+  cv._heroBetBB = 3;
+  assert.match(cv._heroBetCrossCheck({ heroBetObserved: NRstable }), /HERO-BET DRIFT/);
+});
+
+test('hero-bet cross-check: inconclusive (occluded/unconfirmed badge) → no warning', () => {
+  const { cv } = makeConverter();
+  cv._heroBetBB = 2.3;
+  assert.strictEqual(cv._heroBetCrossCheck({ heroBetObserved: OCCl }), null);
+  assert.strictEqual(cv._heroBetCrossCheck({ heroBetObserved: { value: 9, status: 'read', confirmed: false, stable: false } }), null);
+});
+
+test('hero-bet cross-check: no heroBet yet → no warning', () => {
+  const { cv } = makeConverter();
+  cv._heroBetBB = null;
+  assert.strictEqual(cv._heroBetCrossCheck({ heroBetObserved: RD(5) }), null);
+});
+
 test('escalates on the poll-counter floor when stuck withholding on hero turn', () => {
   const { cv } = makeConverter({ esc: { maxPolls: 3 } });
   // hero turn but board never resolves (mid-deal counts) → never assembles

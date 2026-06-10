@@ -14,7 +14,7 @@
           PokerHistory, PokerEscalate, PokerBotLink, PokerConverter, useLiveOCR */
 
 function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
-  const [view, setView] = React.useState({ state: 'idle', advice: null, warning: null, seatWarning: null });
+  const [view, setView] = React.useState({ state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null });
   const [linkStatus, setLinkStatus] = React.useState('idle');
   const convRef = React.useRef(null);
 
@@ -43,7 +43,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     const { conv } = convRef.current;
     conv.onFrame(getCrops, dims);
     // copy the converter's view into React state (cheap shallow object)
-    setView({ state: conv.view.state, advice: conv.view.advice, warning: conv.view.warning, seatWarning: conv.view.seatWarning });
+    setView({ state: conv.view.state, advice: conv.view.advice, warning: conv.view.warning, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning });
   }, []);
 
   const { status, start, stop } = useLiveOCR({
@@ -82,6 +82,8 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         view.warning || "can't read state — decide manually"),
       // the seat-order self-check warning (top live-validation item) — loud
       view.seatWarning && React.createElement('div', { style: S.seatwarn }, view.seatWarning),
+      // hero-bet stack-delta vs bet-badge drift (to_call ground-truth check)
+      view.betWarning && React.createElement('div', { style: S.seatwarn }, view.betWarning),
     )
   );
 }

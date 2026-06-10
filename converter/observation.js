@@ -291,6 +291,16 @@
           Object.assign({ offsetX: R.BUTTON_SCAN_RECT.x, offsetY: R.BUTTON_SCAN_RECT.y }, opts))
       : { seat: null, status: 'no-read', reason: 'no-crop' };
 
+    // hero-bet VALIDATION read (§0.10 cross-check, NOT the source). We OCR hero's
+    // own bet badge purely so the orchestrator can compare it against the
+    // stack-delta heroBet and warn on drift. A misread here cannot corrupt the
+    // snapshot — current_bets[hero] still comes from frame.heroBet — it only
+    // raises a flag. This is the visible ground truth for the costliest field.
+    const hbc = frame.getColor(`bet_${R.HERO_SEAT}`), hbb = frame.getBinarized(`bet_${R.HERO_SEAT}`);
+    obs.heroBetObserved = (hbc && hbb)
+      ? readNumericBadge(hbc, hbb, frame.digitMatcher, opts)
+      : { value: null, status: 'no-read', reason: 'no-crop' };
+
     // timer
     const tm = frame.getColor('timer');
     obs.timer = tm ? timerFraction(tm.rgba, tm.w, tm.h, opts) : { fraction: 0, status: 'no-read', reason: 'no-crop' };

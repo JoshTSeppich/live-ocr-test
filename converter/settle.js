@@ -139,6 +139,10 @@
         turn.status === 'read' ? (turn.heroToAct ? 'turn:1' : 'turn:0') : '@no-read');
       out.timer = obs.timer || { fraction: 0, status: 'no-read' };
 
+      // hero-bet validation read (cross-check only; debounced like any field)
+      const hbo = obs.heroBetObserved || { value: null, status: 'no-read' };
+      out.heroBetObserved = this._record('heroBetObserved', hbo, fieldKey(hbo, this.decimals));
+
       // frame settle gate
       const settleKey = pushOpts.stabilityKey != null ? String(pushOpts.stabilityKey) : this._deriveSettleKey(obs);
       if (this._prevSettleKey != null && settleKey === this._prevSettleKey) this._settleRun++;

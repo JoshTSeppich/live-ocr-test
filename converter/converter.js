@@ -40,7 +40,7 @@
       this.escalator = deps.escalator;     // Escalator
       this.digitMatcher = deps.digitMatcher;
       this.cardMatcher = deps.cardMatcher;
-      this.cfg = Object.assign({ BB_CHIPS: 100, potIncludesCurrentBets: false, sbRatio: 0.5 }, deps.cfg || {});
+      this.cfg = Object.assign({ BB_CHIPS: 100, potIncludesCurrentBets: false, sbRatio: 0.5, heroBetTolBB: 0.5 }, deps.cfg || {});
 
       this._heroBetBB = null;
       this._streetStartHeroStackBB = null;
@@ -48,7 +48,7 @@
       this._sentThisTurn = false;
       this._advice = null;
       this._prevHist = null;               // {bets,stacks} chips for Layer-4 deltas
-      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, withheld: null };
+      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, withheld: null };
 
       if (this.botLink) {
         this.botLink.onAdvice = (a) => { this._advice = a; };
@@ -97,6 +97,10 @@
       this.view.seatWarning = (asm.ok && asm.seatCheck && !asm.seatCheck.ok && !asm.seatCheck.inconclusive)
         ? asm.seatCheck.warning : null;
 
+      // hero-bet ground-truth cross-check (§0.10): stack-delta heroBet vs the OCR
+      // of hero's own bet badge. Validation only — never changes what we send.
+      this.view.betWarning = this._heroBetCrossCheck(confirmed);
+
       // Layer-4 history derive (subordinate; safe-[] on any inconsistency)
       if (asm.ok && this.history) this._deriveHistory(asm, confirmed);
 
@@ -138,6 +142,26 @@
       let bet = Math.max(0, this._streetStartHeroStackBB - heroStackBB);
       if (this._street === 0) bet += this._heroPostedBlindBB(confirmed); // preflop blind hero posted
       return bet;
+    }
+
+    // Cross-check the stack-delta heroBet against the OCR of hero's own bet badge
+    // (§0.10 ground truth). Returns a warning string on drift, else null. Only
+    // fires when BOTH are confident; the badge is NEVER the source — a misread
+    // here raises a flag, it cannot corrupt the snapshot. to_call is the field
+    // whose error is most costly, so this guards it.
+    _heroBetCrossCheck(confirmed) {
+      const obs = confirmed.heroBetObserved;
+      if (!obs || this._heroBetBB == null) return null;
+      let observedBB = null;
+      if (obs.status === 'read' && obs.confirmed) observedBB = obs.value;
+      else if (obs.status === 'no-read' && obs.stable) observedBB = 0; // settled-empty badge = no bet
+      if (observedBB == null) return null; // inconclusive (occluded / unsettled) — don't warn
+      const tol = this.cfg.heroBetTolBB;
+      if (Math.abs(this._heroBetBB - observedBB) > tol) {
+        return `⚠ HERO-BET DRIFT: stack-delta=${this._heroBetBB.toFixed(2)}bb vs bet-badge=${observedBB.toFixed(2)}bb `
+          + `(>${tol}bb). to_call may be wrong — stack-delta is the source; the badge is the visible cross-check.`;
+      }
+      return null;
     }
 
     _heroPostedBlindBB(confirmed) {
