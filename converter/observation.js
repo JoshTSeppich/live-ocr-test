@@ -284,8 +284,10 @@
 
     // button
     const btn = frame.getColor('button_scan');
+    // opts.buttonSlots / offset / size let the frame adapter pass live-resolution
+    // -scaled values (§0.8 slots are native 2940×1846); default to native.
     obs.button = btn
-      ? detectButton(btn.rgba, btn.w, btn.h, R.BUTTON_SLOTS,
+      ? detectButton(btn.rgba, btn.w, btn.h, opts.buttonSlots || R.BUTTON_SLOTS,
           Object.assign({ offsetX: R.BUTTON_SCAN_RECT.x, offsetY: R.BUTTON_SCAN_RECT.y }, opts))
       : { seat: null, status: 'no-read', reason: 'no-crop' };
 

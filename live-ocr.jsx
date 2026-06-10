@@ -314,7 +314,7 @@ function hamming64(a, b) {
 // processed image width (the source canvas always keeps full resolution).
 function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
                        preprocess = true, ocrMaxWidth = 1200, binarizeThreshold = 128,
-                       recognizeFast }) {
+                       recognizeFast, onFrame }) {
   const [status, setStatus] = React.useState('idle'); // idle|connecting|running|error
   const [error, setError]   = React.useState(null);
   const [latency, setLatency] = React.useState(null);          // sum across regions, last pass
@@ -345,6 +345,13 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
   regionsRef.current = regions;
   const recognizeFastRef = React.useRef(recognizeFast);
   recognizeFastRef.current = recognizeFast;
+  // onFrame: a whole-frame consumer (the converter) that needs BOTH the colour
+  // source crop and the binarized ocr crop per region from the SAME frame. The
+  // per-region recognizeFast path only exposes the binarized crop, which has no
+  // colour — feeding it to the converter's occlusion gate would silently disable
+  // green-badge detection. onFrame fires once per frame after PHASE 1.
+  const onFrameRef = React.useRef(onFrame);
+  onFrameRef.current = onFrame;
   const preprocessRef = React.useRef(preprocess);
   preprocessRef.current = preprocess;
   const ocrMaxWidthRef = React.useRef(ocrMaxWidth);
@@ -485,6 +492,29 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
             binarizeInvert(ocrCtx, targetW, targetH, thresholdRef.current || 128);
           }
           prepared.push({ region, pair, srcCtx, scale });
+        }
+
+        // ── onFrame: hand the whole frame to a converter-style consumer BEFORE
+        // PHASE 2. getCrops(regionId) returns the colour SOURCE crop and the
+        // binarized OCR crop together, same-frame. Colour is needed for the
+        // occlusion gate / button blob / timer bar; binarized for the digit
+        // matcher. Additive — does not affect the OCR path below.
+        if (onFrameRef.current) {
+          const pairById = new Map(prepared.map((p) => [p.region.id, p.pair]));
+          const getCrops = (regionId) => {
+            const pair = pairById.get(regionId);
+            if (!pair) return null;
+            const sctx = pair.source.getContext('2d', { willReadFrequently: true });
+            const simg = sctx.getImageData(0, 0, pair.source.width, pair.source.height);
+            const octx = pair.ocr.getContext('2d', { willReadFrequently: true });
+            const oimg = octx.getImageData(0, 0, pair.ocr.width, pair.ocr.height);
+            return {
+              color: { rgba: simg.data, w: pair.source.width, h: pair.source.height },
+              binarized: { rgba: oimg.data, w: pair.ocr.width, h: pair.ocr.height },
+            };
+          };
+          try { onFrameRef.current(getCrops, { videoW: vw, videoH: vh }); }
+          catch (e) { /* a converter fault must never break the capture loop */ }
         }
 
         // ── PHASE 2: OCR each region + emit events. By now all source
