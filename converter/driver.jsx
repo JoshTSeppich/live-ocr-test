@@ -14,9 +14,10 @@
           PokerHistory, PokerEscalate, PokerBotLink, PokerConverter, useLiveOCR */
 
 function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
-  const [view, setView] = React.useState({ state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null });
+  const [view, setView] = React.useState({ state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, callWarning: null });
   const [linkStatus, setLinkStatus] = React.useState('idle');
   const convRef = React.useRef(null);
+  const regionTextRef = React.useRef({}); // latest per-region OCR text (for check-vs-call)
 
   // Build the pipeline once.
   if (!convRef.current) {
@@ -41,18 +42,21 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   // Feed every captured frame into the converter, then publish its view.
   const onFrame = React.useCallback((getCrops, dims) => {
     const { conv } = convRef.current;
+    // feed the latest action-panel OCR text (from Tesseract path) for check-vs-call
+    conv.setPanelText(regionTextRef.current && regionTextRef.current.action_panel || null);
     conv.onFrame(getCrops, dims);
     // copy the converter's view into React state (cheap shallow object)
-    setView({ state: conv.view.state, advice: conv.view.advice, warning: conv.view.warning, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning });
+    setView({ state: conv.view.state, advice: conv.view.advice, warning: conv.view.warning, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning });
   }, []);
 
-  const { status, start, stop } = useLiveOCR({
+  const { status, start, stop, regionText } = useLiveOCR({
     intervalMs: 250,
     regions: PokerRegions.captureRegions(),
     preprocess: true,
     binarizeThreshold: 128,
     onFrame,
   });
+  regionTextRef.current = regionText; // keep the ref fresh for onFrame's closure
 
   React.useEffect(() => () => { try { convRef.current && convRef.current.botLink.close(); } catch (e) {} }, []);
 
@@ -84,6 +88,8 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       view.seatWarning && React.createElement('div', { style: S.seatwarn }, view.seatWarning),
       // hero-bet stack-delta vs bet-badge drift (to_call ground-truth check)
       view.betWarning && React.createElement('div', { style: S.seatwarn }, view.betWarning),
+      // to_call sign vs the shown Check/Call button (validates ACTION_PANEL_RECT)
+      view.callWarning && React.createElement('div', { style: S.seatwarn }, view.callWarning),
     )
   );
 }

@@ -169,6 +169,41 @@ test('hero-bet cross-check: no heroBet yet → no warning', () => {
   assert.strictEqual(cv._heroBetCrossCheck({ heroBetObserved: RD(5) }), null);
 });
 
+// ── check-vs-call cross-check (validates to_call SIGN + ACTION_PANEL_RECT) ───
+test('check-vs-call: CALL shown agrees with to_call>0 → no warning', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText('Fold  Call 2.50  Raise');
+  assert.strictEqual(cv._checkVsCall(300), null);
+});
+test('check-vs-call: CHECK shown agrees with to_call==0 → no warning', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText('Fold  Check  Bet');
+  assert.strictEqual(cv._checkVsCall(0), null);
+});
+test('check-vs-call: CHECK shown but to_call>0 → mismatch warning (wrong sign)', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText('Fold  Check  Bet');
+  assert.match(cv._checkVsCall(300), /TO_CALL\/BUTTON MISMATCH/);
+});
+test('check-vs-call: CALL shown but to_call==0 → mismatch warning', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText('Fold  Call 2.50  Raise');
+  assert.match(cv._checkVsCall(0), /TO_CALL\/BUTTON MISMATCH/);
+});
+test('check-vs-call: tolerant of OCR noise on the button word', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText('FoId  Cail 2.50  Raise'); // l→i mangling
+  assert.strictEqual(cv._checkVsCall(300), null, 'still reads as call');
+});
+test('check-vs-call: no/garbage panel text → unknown → no warning (inconclusive)', () => {
+  const { cv } = makeConverter();
+  assert.strictEqual(cv._checkVsCall(300), null);   // never set
+  cv.setPanelText('xxxxx');
+  assert.strictEqual(cv._checkVsCall(300), null);
+  cv.setPanelText('Fold Call Check'); // both present → inconclusive
+  assert.strictEqual(cv._checkVsCall(300), null);
+});
+
 test('escalates on the poll-counter floor when stuck withholding on hero turn', () => {
   const { cv } = makeConverter({ esc: { maxPolls: 3 } });
   // hero turn but board never resolves (mid-deal counts) → never assembles

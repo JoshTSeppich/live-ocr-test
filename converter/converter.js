@@ -48,12 +48,18 @@
       this._sentThisTurn = false;
       this._advice = null;
       this._prevHist = null;               // {bets,stacks} chips for Layer-4 deltas
-      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, withheld: null };
+      this._panelText = null;              // latest action-panel OCR text (check-vs-call)
+      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, callWarning: null, withheld: null };
 
       if (this.botLink) {
         this.botLink.onAdvice = (a) => { this._advice = a; };
       }
     }
+
+    // The driver feeds hero's action-panel OCR text here (from useLiveOCR's
+    // existing Tesseract path) so the check-vs-call cross-check can read which
+    // button is shown. One-frame-stale is fine for a validation check.
+    setPanelText(text) { this._panelText = text; }
 
     // Called by useLiveOCR's onFrame. Returns a result for tests/inspection.
     onFrame(getCrops, dims) {
@@ -100,6 +106,11 @@
       // hero-bet ground-truth cross-check (§0.10): stack-delta heroBet vs the OCR
       // of hero's own bet badge. Validation only — never changes what we send.
       this.view.betWarning = this._heroBetCrossCheck(confirmed);
+
+      // check-vs-call cross-check: validates the SIGN of to_call against which
+      // button the client shows (CHECK ⇔ to_call==0, CALL ⇔ to_call>0), and
+      // exercises ACTION_PANEL_RECT. Validation only.
+      this.view.callWarning = asm.ok ? this._checkVsCall(asm.request.to_call) : null;
 
       // Layer-4 history derive (subordinate; safe-[] on any inconsistency)
       if (asm.ok && this.history) this._deriveHistory(asm, confirmed);
@@ -160,6 +171,34 @@
       if (Math.abs(this._heroBetBB - observedBB) > tol) {
         return `⚠ HERO-BET DRIFT: stack-delta=${this._heroBetBB.toFixed(2)}bb vs bet-badge=${observedBB.toFixed(2)}bb `
           + `(>${tol}bb). to_call may be wrong — stack-delta is the source; the badge is the visible cross-check.`;
+      }
+      return null;
+    }
+
+    // Classify the action panel from its (Tesseract-mangled) OCR text. The
+    // middle button is CHECK when to_call==0, CALL when to_call>0 — the only
+    // independent witness to to_call's SIGN. Tolerant of OCR noise.
+    _classifyPanel() {
+      const t = (this._panelText || '').toLowerCase();
+      if (!t) return 'unknown';
+      const hasCall = /\bca[l1i]{1,2}\b|call/.test(t);
+      const hasCheck = /\bch[e3]c?k\b|check|cheek/.test(t);
+      if (hasCall && !hasCheck) return 'call';
+      if (hasCheck && !hasCall) return 'check';
+      return 'unknown'; // both or neither — inconclusive, don't warn
+    }
+
+    // Cross-check to_call's sign against the shown button. Validation only.
+    _checkVsCall(toCallChips) {
+      const cls = this._classifyPanel();
+      if (cls === 'unknown') return null;
+      if (toCallChips > 0 && cls === 'check') {
+        return `⚠ TO_CALL/BUTTON MISMATCH: to_call=${toCallChips} (>0) but a CHECK button is shown — `
+          + `to_call sign may be wrong (also check ACTION_PANEL_RECT).`;
+      }
+      if (toCallChips === 0 && cls === 'call') {
+        return `⚠ TO_CALL/BUTTON MISMATCH: to_call=0 but a CALL button is shown — `
+          + `to_call may be wrong (also check ACTION_PANEL_RECT).`;
       }
       return null;
     }
