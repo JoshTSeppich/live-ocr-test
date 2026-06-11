@@ -140,6 +140,9 @@ Every monetary value on the wire is in **big blinds**, never dollars. The eyes d
 
 ## 5. Event vocabulary
 
+> **⚠️ SUPERSEDED FOR THE WIRE LAYER (2026-06-10) — repo-local copy.** This 16-kind event vocabulary is **historical**. The eyes no longer emit a primitive event stream; the converter assembles a complete `GameStateRequest` **snapshot** from absolute settled-frame reads. Canonical corpus + decision record: **`~/projects/pixelpoker-governance/`** — see **ADR-0009** and **`CONVERTER_BUILD_SPEC.md §0`**.
+> What changed: **snapshot, not these 16 events** · **integer chips, not BB** · **`ws://localhost:8766`, not 8765** · **no chat log** (the playing client renders none). Catalog retained for history.
+
 The eyes can emit 16 event kinds. The full schema lives in `PROTOCOL.md`. Brief catalog:
 
 | Kind | Source instinct | Carries |

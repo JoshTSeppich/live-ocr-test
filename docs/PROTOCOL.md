@@ -1,5 +1,8 @@
 # PixelPoker — PROTOCOL
 
+> **⚠️ SUPERSEDED FOR THE WIRE LAYER (2026-06-10) — repo-local copy.** Builder sessions read this file, so the banner lives here too. The live table↔brain contract is a complete `GameStateRequest` **snapshot**, not this event stream. Canonical corpus + decision record: **`~/projects/pixelpoker-governance/`** — see **ADR-0009** and **`CONVERTER_BUILD_SPEC.md §0`** there.
+> What changed: **snapshot, not 16 events** · **integer chips, not BB** · **`ws://localhost:8766`, not 8765** · **no chat log**. Body retained for event-semantics history.
+
 The wire format between the table body and the brain body. One WebSocket. Two directions. Sixteen event kinds outbound (table → brain). Eight decision actions inbound (brain → table). This document is the canonical reference; if anything in `EYES_SPEC.md` or `MATCHER_SPEC.md` disagrees, PROTOCOL wins.
 
 **Read first:** `ARCHITECTURE.md`.
