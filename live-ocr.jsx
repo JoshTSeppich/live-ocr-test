@@ -366,7 +366,8 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
         throw new Error('Tesseract.js not loaded');
       }
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 15 }, audio: false,
+        video: { displaySurface: 'window', frameRate: 15 }, audio: false,
+        monitorTypeSurfaces: 'exclude',
       });
       streamRef.current = stream;
       setStream(stream);
