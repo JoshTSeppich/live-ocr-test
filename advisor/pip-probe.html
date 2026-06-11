@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Document PiP probe</title>
+<body style="font:24px system-ui;padding:2rem">
+<script>
+  const ok = 'documentPictureInPicture' in window;
+  document.body.textContent = 'documentPictureInPicture in window: ' + ok
+    + '  |  Chrome UA: ' + navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0];
+  window.__pipProbe = { available: ok, ua: navigator.userAgent };
+</script>

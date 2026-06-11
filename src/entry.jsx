@@ -17,3 +17,4 @@ import './setup-globals.js';
 import '../live-ocr.jsx';
 import '../live-ocr-test.jsx';
 import './converter-globals.js';
+import '../advisor/advisor-mount.jsx';
