@@ -56,7 +56,12 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         view: conv.view, advice: conv._advice, request: res && res.request,
         sentThisTurn: conv._sentThisTurn, polls: pollRef.current,
         bbChips: conv.cfg && conv.cfg.BB_CHIPS,
+        // amendment E producer signals (stale supersession + brain/panel decline)
+        stale: conv.view.stale, declined: conv.view.declined, lastSeq: conv._lastSentSeq,
       }));
+      // live→PiP bridge: publish onto the ONE shared bus the always-on-top PiP
+      // host (advisor-mount.jsx) subscribes to, so the human sees LIVE advice.
+      if (advisorEvent) AdvisorEvent.sharedBus().publish(advisorEvent);
     } catch (e) { advisorEvent = null; } // never let a display map crash capture
     setView({ state: conv.view.state, advisorEvent, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning });
   }, []);

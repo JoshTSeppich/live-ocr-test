@@ -118,3 +118,46 @@ test('fromConverter: an unparseable advised action degrades to WAIT, never a fak
   });
   assert.equal(e.kind, 'wait');
 });
+
+// ── E: stale + wait production (the panel could render these; now produced) ───
+test('fromConverter: src.stale SUPERSEDES advice → stale with the newer seq', () => {
+  const e = AE.fromConverter({
+    view: { state: 'advising' },                       // brain advice is in hand…
+    advice: { action: 'raise', amount: 400, seq: 1 },  // …for the OLD snapshot
+    request: REQUEST, stale: true, lastSeq: 2,         // …but a newer snapshot superseded it
+  });
+  assert.equal(e.kind, 'stale', 'stale must beat advice — never execute stale advice');
+  assert.equal(e.seq, 2, 'carries the newer seq');
+});
+test('fromConverter: src.declined → wait (brain declined / §3a panel disagreement)', () => {
+  const e = AE.fromConverter({
+    view: { state: 'advising' }, advice: { action: 'raise', amount: 400, seq: 5 },
+    request: REQUEST, declined: { reason: 'brain-decline' },
+  });
+  assert.equal(e.kind, 'wait');
+});
+
+// ── E: amount-unit pin (live-validation) ─────────────────────────────────────
+// The adapter treats the brain reply `amount` as a CHIPS raise-to total. Pin it so
+// a future change can't silently reinterpret it; the BB conversion is display-only.
+test('fromConverter/amount-unit: brain amount is chips raise-to; BB conversion is display-edge only', () => {
+  const e = AE.fromConverter({
+    view: { state: 'advising' },
+    advice: { action: 'raise', amount: 750, seq: 9 }, // 750 CHIPS raise-to (not 7.5 BB)
+    request: REQUEST, bbChips: 100,
+  });
+  assert.equal(e.sizing.raiseToChips, 750, 'amount consumed as chips raise-to total');
+  assert.equal(e.amountChips, 750);
+  assert.equal(AE.toBB(e.sizing.raiseToChips, e.bbChips), 7.5, 'chips→BB only at the display edge');
+});
+
+// ── E: the shared bus (live→PiP bridge) is a process singleton ───────────────
+test('sharedBus: same instance both sides, drop-in for createBus', () => {
+  assert.strictEqual(AE.sharedBus(), AE.sharedBus(), 'one shared instance');
+  let got = null;
+  const unsub = AE.sharedBus().subscribe((n) => { got = n; });
+  AE.sharedBus().publish({ kind: 'advice', action: 'call', amountChips: 200, seq: 1, bbChips: 100 });
+  assert.equal(got && got.kind, 'advice');
+  assert.equal(got.amountChips, 200);
+  unsub();
+});

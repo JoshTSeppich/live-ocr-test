@@ -133,6 +133,14 @@
     };
   }
 
+  // ── the ONE shared bus (live→PiP bridge seam) ──────────────────────────────
+  // Both the live converter (driver.jsx, the producer) and the always-on-top PiP
+  // host (advisor-mount.jsx, the consumer) talk to this single instance, so the
+  // PiP the human looks at shows LIVE advice. The stub publishes here too — last
+  // writer wins (you run one source at a time). Process-singleton.
+  let _shared = null;
+  function sharedBus() { if (!_shared) _shared = createBus(); return _shared; }
+
   // ── live adapter: converter pipeline → AdvisorEvent (the production seam) ──
   // Pure + node-testable. Maps what the CURRENT converter actually exposes
   // (driver.jsx reaches conv.view.state, the parsed brain reply conv._advice,
@@ -144,10 +152,13 @@
   //   waiting &  sentThisTurn     → thinking   (clean snapshot sent, awaiting brain)
   //   advising                   → advice
   //   escalate                   → escalate   (§5 clock-low, can't read)
-  // NOTE: `wait` (brain declined) and `stale` (supersession) are NOT emitted by
-  // today's converter — it has no brain-decline state and no stale signal. The
-  // panel SUPPORTS both (proven via the stub); wiring them is a producer-side
-  // follow-up for CC-C (see ADVISOR_PANEL_INTERFACE.md).
+  //   src.stale                  → stale      (CC-C: newer snapshot superseded shown advice)
+  //   src.declined               → wait       (CC-C: brain declined / §3a panel disagreement)
+  // `stale` and `wait` are now PRODUCED by the converter (amendment E):
+  //   - src.stale: this._lastSentSeq > the shown advice's seq (a fresh snapshot
+  //     superseded it). Carries the NEWER seq.
+  //   - src.declined: a brain decline (botLink.onError) or a §3a panel↔arithmetic
+  //     disagreement on what is still hero's turn.
   const _norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z]/g, '');
   function mapAction(action, abstractAction, amountChips, request) {
     const candidates = [_norm(action), _norm(abstractAction)];
@@ -178,6 +189,15 @@
     const seq = (advice && Number.isFinite(advice.seq)) ? advice.seq
               : (Number.isFinite(src.lastSeq) ? src.lastSeq : 0);
     const base = { seq, bbChips, urgency };
+
+    // stale supersedes everything — executing stale advice is the worst failure of
+    // a tell-only tool. Carry the NEWER snapshot seq.
+    if (src.stale) {
+      const staleSeq = Number.isFinite(src.lastSeq) ? src.lastSeq : seq;
+      return Object.assign({ kind: 'stale' }, base, { seq: staleSeq });
+    }
+    // brain declined / strict-block, or a §3a panel↔arithmetic disagreement → wait.
+    if (src.declined) return Object.assign({ kind: 'wait' }, base);
 
     if (view.state === 'advising' && advice) {
       let action = mapAction(advice.action, advice.abstractAction, advice.amount, request);
@@ -210,6 +230,6 @@
 
   return {
     KINDS, ACTIONS, VERB, COLOR, STATE_BG, STATE_LABEL, BLOCK_MSG,
-    toBB, normalize, createBus, mapAction, fromConverter,
+    toBB, normalize, createBus, sharedBus, mapAction, fromConverter,
   };
 });

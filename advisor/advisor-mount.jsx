@@ -32,7 +32,10 @@ function AdvisorController() {
   const pip = window.useAdvisorPip();
 
   if (!refs.current) {
-    const bus = AE.createBus();
+    // the ONE shared bus: the live converter (driver.jsx) publishes here, and the
+    // stub publishes here too — so this PiP host shows LIVE advice at merge
+    // (ADVISOR_PANEL_INTERFACE.md "Bridging the live converter feed").
+    const bus = AE.sharedBus();
     const audio = window.AdvisorAudio.createAudio();
     const stub = window.AdvisorStub.createStub(bus, { seed: 7 });
     refs.current = { bus, audio, stub };
@@ -91,7 +94,7 @@ function AdvisorController() {
       running ? barBtn('Stop stub', stopStub, true) : barBtn('Start stub', startStub, false),
       barBtn(pip.isOpen ? 'PiP open ✓' : 'Open PiP', openPip, pip.isOpen),
       h('span', { style: { fontSize: 11, color: '#6b7177', marginLeft: 'auto' } },
-        pip.supported ? 'source: stub' : 'PiP unsupported')),
+        pip.supported ? ('source: ' + (running ? 'stub' : 'live')) : 'PiP unsupported')),
     // in-page preview (the same component the PiP shows)
     h('div', { style: previewBox }, h(window.AdvisorPanel, panelProps)),
     // PiP portal — same React state, separate OS window
