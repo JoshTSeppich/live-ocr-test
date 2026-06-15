@@ -205,11 +205,12 @@
     return { fraction: filled / w, status: 'read', filledCols: filled, totalCols: w };
   }
 
-  // ─── turn indicator (§0.7 / §2) ────────────────────────────────────────────
-  // Hero is to act iff the action-button panel (Fold/Call/Raise) is present.
-  // The panel's red Call/Raise buttons are the cheap pixel signal. The panel
-  // RECT is LIVE-UNVALIDATED (regions.ACTION_PANEL_RECT) — this detector is the
-  // contract; threshold/rect get confirmed at bring-up. `redFrac` of the crop.
+  // ─── turn indicator (§0.7 / §2 / §3a) ──────────────────────────────────────
+  // The panel's red buttons are a CHEAP PRECONDITION ("something actionable is up")
+  // — NOT the authority. P4 proved "any red" over-counts hero-turn by ~40%: the
+  // Boost Fast-Fold pre-button is a lone red FOLD shown while waiting. Hero's turn
+  // is decided by the FULL action set parsed from the panel text — see
+  // classifyActionSet below; the converter ANDs that with this red signal.
   function isRedButton(rgba, i) {
     const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
     return r > 150 && (r - g) > 60 && (r - b) > 60;
@@ -219,6 +220,38 @@
     const redT = opts.turnRedFrac != null ? opts.turnRedFrac : 0.04;
     const red = fracMatching(rgba, w, h, isRedButton);
     return { heroToAct: red >= redT, redFrac: red, status: 'read' };
+  }
+
+  // Authoritative hero-turn classifier from the OCR'd action-panel text (§3a:
+  // the rendered button panel is authoritative for legal actions). P4: hero's
+  // turn requires the FULL action set (Fold + Check|Call + Bet|Raise). The
+  // Fast-Fold pre-button shows a lone red FOLD with gray "Call Any"/"Raise Any"
+  // auto-action selectors; the real panel shows enabled Check/Call + Bet/Raise
+  // with printed amounts. Returns one of:
+  //   'absent'      — no panel text → cannot confirm a turn (benign)
+  //   'fastfold'    — Fast-Fold pre-button ("...Any" selectors, or a lone Fold) →
+  //                   NOT hero's turn (this is the ~40% the red signal over-counts)
+  //   'full'        — Fold + (Check|Call) + (Bet|Raise) → hero's turn to act
+  //   'unparseable' — text present but a partial/garbled action panel → WITHHOLD
+  //                   (do not fire advice on an unreadable panel; let §5 escalate)
+  // LIVE-VALIDATION: exact button strings/order confirm at bring-up; the token
+  // matchers are deliberately OCR-noise tolerant and tunable here.
+  function classifyActionSet(panelText) {
+    const t = String(panelText == null ? '' : panelText).toLowerCase();
+    if (!t.replace(/[^a-z0-9]/g, '')) return 'absent';
+    const has = (re) => re.test(t);
+    const fastMarker = has(/fast/) || has(/\bany\b/);          // Fast-Fold auto-selectors
+    const hasFold = has(/fold/) || has(/fo[l1i]d/);
+    const hasCheck = has(/check/) || has(/cheek/) || has(/ch[e3]ck/);
+    const hasCall = has(/call/) || has(/cail/) || has(/ca[l1]{2}/);
+    const hasBet = has(/\bbet\b/) || has(/\bbe[t7]\b/);
+    const hasRaise = has(/raise/) || has(/ra[i1l]se/);
+    const hasMiddle = hasCheck || hasCall;                     // Check OR Call
+    const hasAggro = hasBet || hasRaise;                       // Bet OR Raise
+    if (fastMarker) return 'fastfold';
+    if (hasFold && hasMiddle && hasAggro) return 'full';
+    if (hasFold && !hasMiddle && !hasAggro) return 'fastfold'; // lone-Fold pre-button
+    return 'unparseable';                                      // partial/garbled → withhold
   }
 
   // ─── card cells → codes (§0.6, via engine MultiSignatureMatcher) ───────────
@@ -324,7 +357,7 @@
     DEFAULTS,
     isYellow, isGreen, isWhiteText, isRedButton, fracMatching,
     classifyPlate, parseBB, readNumericBadge,
-    detectButton, timerFraction, turnIndicator, readCardCells,
+    detectButton, timerFraction, turnIndicator, classifyActionSet, readCardCells,
     observeFrame,
     _engineLoaded: !!Engine, _regionsLoaded: !!Regions,
   };

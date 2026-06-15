@@ -275,3 +275,25 @@ test('observeFrame: missing crops → no-read, never a crash', () => {
   assert.strictEqual(obs.button.status, 'no-read');
   assert.strictEqual(obs.timer.status, 'no-read');
 });
+
+// ── classifyActionSet (§3a / P4 turn authority) ─────────────────────────────
+test('classifyActionSet: full action set (Fold + Call + Raise with amounts) → full', () => {
+  assert.strictEqual(O.classifyActionSet('Fold  Call 5.60  Raise 11.20'), 'full');
+  assert.strictEqual(O.classifyActionSet('FOLD CHECK BET'), 'full');
+  assert.strictEqual(O.classifyActionSet('Fold  Check  Raise 3.00'), 'full');
+});
+test('classifyActionSet: Fast-Fold pre-button ("...Any" selectors) → fastfold (NOT a turn)', () => {
+  assert.strictEqual(O.classifyActionSet('Fold  Call Any  Raise Any'), 'fastfold');
+  assert.strictEqual(O.classifyActionSet('Fast Fold'), 'fastfold');
+  assert.strictEqual(O.classifyActionSet('Fold'), 'fastfold'); // lone Fold pre-button
+});
+test('classifyActionSet: no text → absent; partial/garbled → unparseable (withhold)', () => {
+  assert.strictEqual(O.classifyActionSet(''), 'absent');
+  assert.strictEqual(O.classifyActionSet(null), 'absent');
+  assert.strictEqual(O.classifyActionSet('   !!  '), 'absent');
+  assert.strictEqual(O.classifyActionSet('R8!se C#ll'), 'unparseable'); // garbled
+  assert.strictEqual(O.classifyActionSet('Fold Call'), 'unparseable');  // missing aggro button
+});
+test('classifyActionSet: OCR-noise tolerant (l→i/1 mangling) still reads full', () => {
+  assert.strictEqual(O.classifyActionSet('FoId  Cail 5.60  Ra1se 11.20'), 'full');
+});

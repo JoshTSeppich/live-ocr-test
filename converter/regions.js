@@ -78,12 +78,13 @@
   // x 1255..1675 (full ≈ 420 px), y 1519..1532.
   const TIMER_RECT = box(1255, 1519, 420, 13);
 
-  // Turn indicator: the hero action-button panel (Fold/Call/Raise) at bottom
-  // right. §0 did NOT measure this box (the four probes never bounded it), so
-  // these coords are LIVE-UNVALIDATED — a starting estimate from the reference
-  // frame, to be confirmed/re-measured at first live bring-up. The detector
-  // (observation.turnIndicator) is the contract; the rect is calibration.
-  const ACTION_PANEL_RECT = box(2300, 1620, 600, 170); // LIVE-UNVALIDATED
+  // Turn indicator: the hero action-button panel (Fold/Check/Call/Bet/Raise) at
+  // the bottom. P4 (PROBE_FINDINGS_20260610) MEASURED this box — the prior
+  // estimate (2300,1620,600,170) was materially wrong (real panel starts further
+  // left and is ~2× wider). action_reader.py's (1700,1685,1240,161) nearly matches
+  // and cross-checks. Turn authority is the FULL action set parsed from this panel
+  // (observation.classifyActionSet), NOT "any red" — see observation.turnIndicator.
+  const ACTION_PANEL_RECT = box(1744, 1690, 1178, 144); // P4-measured
 
   // Region descriptors for the useLiveOCR capture hook. `name` matters: the
   // existing fast-path router (live-ocr-test.jsx recognizeFast) routes by name
