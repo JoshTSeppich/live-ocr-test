@@ -47,13 +47,30 @@
       this._street = null;
       this._sentThisTurn = false;
       this._advice = null;
+      this._declined = null;               // §3a/E: active decline (→ wait) or null
+      this._brainDeclined = null;          // E: async brain decline (botLink.onError)
+      this._prevHeroToAct = false;         // §3c: prior authoritative turn (edge detect)
+      this._lastSentSeq = 0;               // E: seq of the most recent snapshot sent
+      this._sentSig = null;                // E: signature of the last-sent snapshot
       this._prevHist = null;               // {bets,stacks} chips for Layer-4 deltas
       this._panelText = null;              // latest action-panel OCR text (check-vs-call)
-      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, callWarning: null, withheld: null };
+      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, callWarning: null, withheld: null, actionSet: null, stale: false, declined: null };
 
       if (this.botLink) {
-        this.botLink.onAdvice = (a) => { this._advice = a; };
+        // a parsed advice clears any standing brain-decline for this turn
+        this.botLink.onAdvice = (a) => { this._advice = a; this._brainDeclined = null; };
+        // a brain error/strict-block reply → a decline that surfaces as `wait`
+        // (NO ADVICE — YOU DECIDE). Carries the rejected snapshot's seq if present.
+        this.botLink.onError = (e) => { this._brainDeclined = { reason: 'brain-decline', error: e, seq: e && e.seq != null ? e.seq : null }; };
       }
+    }
+
+    // Stable signature of the salient request fields — drives "is this a NEW
+    // snapshot?" (E: supersession / resend on change, not on every frame).
+    _requestSig(req) {
+      if (!req) return null;
+      return JSON.stringify([req.stacks, req.current_bets, req.board, req.hero_hole,
+        req.button_seat, req.hero_seat, req.pot_committed, req.to_call]);
     }
 
     // The driver feeds hero's action-panel OCR text here (from useLiveOCR's
@@ -115,18 +132,77 @@
       // Layer-4 history derive (subordinate; safe-[] on any inconsistency)
       if (asm.ok && this.history) this._deriveHistory(asm, confirmed);
 
-      // send: on hero's turn, once a clean snapshot exists, send once per turn
+      // Turn authority (§3a / P4). "Any red" over-counts hero-turn ~40% (the Boost
+      // Fast-Fold pre-button is a lone red FOLD). So the debounced red signal
+      // (confirmed.heroToAct) is now only a CHEAP PRECONDITION; the action-button
+      // PANEL is authoritative — we require the FULL action set (Fold + Check|Call
+      // + Bet|Raise) parsed from the panel text fed via setPanelText().
+      const redTurn = confirmed.heroToAct;
+      const actionSet = redTurn ? Obs.classifyActionSet(this._panelText) : 'absent';
+      // authoritative: only a full, parseable action set is hero's turn to act on.
+      const heroToAct = redTurn && actionSet === 'full';
+      // apparent turn but the panel is partial/garbled → WITHHOLD and let §5
+      // escalate ("can't read table — decide"); never fire advice on it. Fast-Fold
+      // / absent panels are benign (not hero's turn) and stay idle.
+      const panelUnreadable = redTurn && actionSet === 'unparseable';
+      this.view.actionSet = redTurn ? actionSet : null;
+
+      // §3a: the rendered panel is AUTHORITATIVE for legal actions; our arithmetic
+      // is a sanity cross-check. On a panel↔arithmetic disagreement (the check-vs-
+      // call SIGN mismatch) we WITHHOLD rather than guess — a decline that surfaces
+      // as `wait` (NO ADVICE — YOU DECIDE), not a fabricated send.
+      const panelDisagree = asm.ok && heroToAct && !!this.view.callWarning;
+
+      // send: on hero's turn (full action set, no panel disagreement), send each
+      // DISTINCT clean snapshot once (by signature). A NEW snapshot (changed
+      // signature) re-sends with a fresh seq — which makes any advice still shown
+      // for the prior seq STALE until the new advice arrives. Advice is KEPT across
+      // transient mid-turn withholds (it clears only when the turn ends, below), so
+      // the supersession is detectable rather than silently dropped.
       let sent = false;
-      if (confirmed.heroToAct) {
-        if (asm.ok && !this._sentThisTurn && this.botLink) { this.botLink.send(asm.request); this._sentThisTurn = true; sent = true; }
-      } else {
+      const canSend = heroToAct && !panelDisagree;
+      if (canSend && asm.ok && this.botLink) {
+        const sig = this._requestSig(asm.request);
+        if (sig !== this._sentSig) {
+          this._lastSentSeq = this.botLink.send(asm.request);
+          this._sentSig = sig;
+          this._sentThisTurn = true;
+          this._brainDeclined = null; // re-asked → clear any prior decline
+          sent = true;
+        }
+      }
+      if (!heroToAct) {
+        // turn ended / not hero's turn → drop all per-turn state (no stale advice
+        // survives into the next decision).
         this._sentThisTurn = false;
+        this._sentSig = null;
         this._advice = null;
+        this._brainDeclined = null;
       }
 
-      // §5 wait/escalate
+      // decline (→ `wait`): a §3a panel↔arithmetic disagreement, OR an async brain
+      // decline / strict-block (botLink.onError) on what is still hero's turn.
+      // Distinct from escalate (eyes can't read) — here we CAN read; the brain
+      // declined or the panel contradicts us. NO ADVICE — YOU DECIDE.
+      this._declined = panelDisagree
+        ? { reason: 'panel-arith-disagreement' }
+        : (heroToAct && this._brainDeclined ? this._brainDeclined : null);
+      this.view.declined = this._declined;
+
+      // stale (E, safety-critical): advice is shown for an OLDER snapshot than the
+      // latest one sent — the table moved past the advised frame. Executing stale
+      // advice is the worst failure of a tell-only tool, so the producer map lets
+      // this supersede the advice.
+      this.view.stale = !!(this._advice && Number.isFinite(this._advice.seq)
+        && this._lastSentSeq > this._advice.seq);
+
+      // §5 wait/escalate. Feed the escalator the authoritative turn (when we're not
+      // declining) OR an unreadable-panel-during-apparent-turn (so it escalates
+      // rather than silently idling). A §3a decline is NOT escalate — it stays out
+      // of the escalator and is surfaced as `wait` downstream. Fast-Fold / absent
+      // panels are benign and stay idle.
       const esc = this.escalator.update({
-        heroToAct: confirmed.heroToAct,
+        heroToAct: (heroToAct && !panelDisagree) || panelUnreadable,
         hasAdvice: !!this._advice,
         timerFraction: confirmed.timer ? confirmed.timer.fraction : null,
       });
@@ -135,7 +211,13 @@
       this.view.withheld = asm.ok ? null : asm.missing;
       this.view.warning = esc.state === 'escalate' ? "can't read state — decide manually" : null;
 
-      return { state: esc.state, sent, request: asm.ok ? asm.request : null, withheld: asm.ok ? null : asm.missing, escalateReason: esc.reason };
+      // §3c mark-unstable-after-hero-acts: the instant hero's turn ends (hero acted),
+      // force the settle gate to re-settle so no pre-action frame is read as post-
+      // action. Detected as the authoritative-turn true→false transition.
+      if (this._prevHeroToAct && !heroToAct) this.debouncer.markUnstable();
+      this._prevHeroToAct = heroToAct;
+
+      return { state: esc.state, sent, request: asm.ok ? asm.request : null, withheld: asm.ok ? null : asm.missing, escalateReason: esc.reason, actionSet: this.view.actionSet, declined: this._declined, stale: this.view.stale, lastSeq: this._lastSentSeq };
     }
 
     _onNewHand() {
@@ -145,6 +227,10 @@
       this._heroBetBB = null;
       this._sentThisTurn = false;
       this._advice = null;
+      this._declined = null;
+      this._brainDeclined = null;
+      this._sentSig = null;
+      this._prevHeroToAct = false;
       this._prevHist = null;
     }
 

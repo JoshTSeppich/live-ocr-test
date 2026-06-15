@@ -84,8 +84,16 @@ function makeConverter(extra) {
 
 const baseScene = { stacks: { TL: 100, TC: 100, TR: 100, BR: 100, BC: 50, BL: 100 }, betTR: 3, pot: 5, board: ['8h', 'Jd', '2d'], hole: ['As', 'Kd'], button: 'TC', timerFrac: 1, heroTurn: true };
 
+// A real hero turn shows the FULL action panel (Fold + Check/Call + Bet/Raise).
+// Turn authority is now this panel text (§3a / P4), not the red pixel alone — so
+// every send-path scene must present it. The Fast-Fold pre-button shows "...Any".
+const FULL_PANEL = 'Fold  Call 5.60  Raise 11.20'; // a facing-bet (CALL) spot
+const CHECK_PANEL = 'Fold  Check  Raise 2.00';      // a check spot (to_call==0)
+const FASTFOLD_PANEL = 'Fold  Call Any  Raise Any';
+
 test('settles then sends one assembled request on hero turn', () => {
   const { cv, sent } = makeConverter();
+  cv.setPanelText(FULL_PANEL);
   const g = scene(baseScene);
   let r = cv.onFrame(g, { videoW: 2940, videoH: 1846 });
   assert.strictEqual(r.sent, false, 'first frame not yet settled');
@@ -99,6 +107,7 @@ test('settles then sends one assembled request on hero turn', () => {
 
 test('does not re-send within the same turn', () => {
   const { cv, sent } = makeConverter();
+  cv.setPanelText(FULL_PANEL);
   const g = scene(baseScene);
   cv.onFrame(g, {}); cv.onFrame(g, {}); cv.onFrame(g, {});
   assert.strictEqual(sent.length, 1, 'one send per turn');
@@ -117,6 +126,7 @@ test('hero bet from stack delta + posted blind, never BC OCR (§0.10)', () => {
   // heroBet = (street-start − current = 0) + the 1bb blind hero posted = 100 chips,
   // derived from the hero STACK + seat mapping — never from the BC bet badge.
   const { cv, sent } = makeConverter();
+  cv.setPanelText(CHECK_PANEL); // hero is BB with the option → to_call==0 → CHECK shown
   const sc = Object.assign({}, baseScene, { board: [], button: 'TR', betTR: null });
   const g = scene(sc);
   cv.onFrame(g, {}); cv.onFrame(g, {});
@@ -206,10 +216,111 @@ test('check-vs-call: no/garbage panel text → unknown → no warning (inconclus
 
 test('escalates on the poll-counter floor when stuck withholding on hero turn', () => {
   const { cv } = makeConverter({ esc: { maxPolls: 3 } });
-  // hero turn but board never resolves (mid-deal counts) → never assembles
+  cv.setPanelText(FULL_PANEL); // confirmed hero turn (full action set)…
+  // …but the board never resolves (mid-deal counts) → never assembles
   const bad = scene(Object.assign({}, baseScene, { board: ['8h', 'Jd'] })); // 2 cards = invalid count
   let r;
   for (let i = 0; i < 4; i++) r = cv.onFrame(bad, {});
   assert.strictEqual(r.state, 'escalate');
   assert.strictEqual(r.escalateReason, 'poll-floor');
+});
+
+// ── C/P4: turn authority = full action set, not "any red" ────────────────────
+test('C/P4: Fast-Fold pre-button (red, but "...Any" pre-selectors) is NOT hero turn → no send, idle', () => {
+  const { cv, sent } = makeConverter();
+  cv.setPanelText(FASTFOLD_PANEL);
+  const g = scene(baseScene); // heroTurn:true → red pixels present
+  let r = cv.onFrame(g, {}); r = cv.onFrame(g, {});
+  assert.strictEqual(sent.length, 0, 'a red Fast-Fold pre-button must not fire a send (the ~40% over-count)');
+  assert.strictEqual(r.actionSet, 'fastfold');
+  assert.strictEqual(r.state, 'idle');
+});
+
+test('C/P4: full action set (red + Fold/Call/Raise) → send', () => {
+  const { cv, sent } = makeConverter();
+  cv.setPanelText(FULL_PANEL);
+  const g = scene(baseScene);
+  cv.onFrame(g, {}); const r = cv.onFrame(g, {});
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(r.actionSet, 'full');
+});
+
+test('C/P4: unparseable panel during apparent turn → withhold (no send) + escalate', () => {
+  const { cv, sent } = makeConverter({ esc: { maxPolls: 3 } });
+  cv.setPanelText('R8!se C#ll'); // garbled — neither a full set nor a Fast-Fold
+  const g = scene(baseScene);    // clean table read, but the panel can't be read
+  let r; for (let i = 0; i < 4; i++) r = cv.onFrame(g, {});
+  assert.strictEqual(sent.length, 0, 'never fire advice on an unreadable panel');
+  assert.strictEqual(r.actionSet, 'unparseable');
+  assert.strictEqual(r.state, 'escalate');
+});
+
+test('C/P4: ACTION_PANEL_RECT corrected to the P4-measured bbox', () => {
+  assert.deepStrictEqual(
+    { x: Reg.ACTION_PANEL_RECT.x, y: Reg.ACTION_PANEL_RECT.y, w: Reg.ACTION_PANEL_RECT.w, h: Reg.ACTION_PANEL_RECT.h },
+    { x: 1744, y: 1690, w: 1178, h: 144 });
+});
+
+// ── D/3a: button panel is authoritative — withhold on panel↔arithmetic disagreement ──
+test('D/3a: CHECK shown but to_call>0 → withhold (no send) + decline (→ wait), not a guessed send', () => {
+  const { cv, sent } = makeConverter();
+  cv.setPanelText('Fold  Check  Bet 5.00'); // full action set, but middle button is CHECK…
+  const g = scene(baseScene);               // …while TR has bet 3 → to_call>0 (a CALL spot)
+  let r = cv.onFrame(g, {}); r = cv.onFrame(g, {});
+  assert.strictEqual(sent.length, 0, 'panel contradicts arithmetic → never guess a send');
+  assert.strictEqual(r.actionSet, 'full');
+  assert.ok(r.declined && /disagree/.test(r.declined.reason), 'surfaces a decline for the wait map');
+});
+test('D/3a: panel agrees (CALL shown, to_call>0) → sends normally', () => {
+  const { cv, sent } = makeConverter();
+  cv.setPanelText('Fold  Call 3.00  Raise 6.00');
+  const g = scene(baseScene);
+  cv.onFrame(g, {}); const r = cv.onFrame(g, {});
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(r.declined, null);
+});
+
+// ── D/3c: mark-unstable after hero acts (turn-end forces a fresh settle) ──────
+test('D/3c: hero turn ending (hero acted) force-re-settles the gate', () => {
+  const { cv } = makeConverter();
+  let unstable = 0;
+  const orig = cv.debouncer.markUnstable.bind(cv.debouncer);
+  cv.debouncer.markUnstable = () => { unstable++; orig(); };
+  cv.setPanelText(FULL_PANEL);
+  const onTurn = scene(baseScene);
+  cv.onFrame(onTurn, {}); cv.onFrame(onTurn, {});          // settle → authoritative hero turn
+  const offTurn = scene(Object.assign({}, baseScene, { heroTurn: false })); // hero acted → red gone
+  cv.onFrame(offTurn, {});
+  assert.ok(unstable >= 1, 'markUnstable fired on the turn-end (true→false) transition');
+});
+
+// ── E: stale (a fresh snapshot supersedes shown advice) — safety-critical ─────
+test('E: a fresh snapshot (table moved) supersedes shown advice → stale, newer seq', () => {
+  const { cv, sent } = makeConverter();
+  cv.setPanelText(FULL_PANEL);
+  const g1 = scene(baseScene);
+  cv.onFrame(g1, {}); cv.onFrame(g1, {});      // settle → send seq 1
+  assert.strictEqual(sent.length, 1);
+  cv._advice = { advice: 'RAISE', action: 'raise', amount: 600, seq: 1 }; // brain replied for seq 1
+  let r = cv.onFrame(g1, {});
+  assert.strictEqual(r.stale, false, 'same snapshot, advice current → not stale');
+  // the table moves (villain re-bets) → a NEW distinct snapshot → re-send seq 2
+  const g2 = scene(Object.assign({}, baseScene, { betTR: 7 }));
+  r = cv.onFrame(g2, {}); r = cv.onFrame(g2, {});
+  assert.strictEqual(sent.length, 2, 'new snapshot re-sent');
+  assert.strictEqual(r.stale, true, 'advice(seq1) superseded by seq2 → stale');
+  assert.ok(r.lastSeq > 1, 'stale carries the newer seq');
+});
+
+// ── E: wait (brain declined / strict-block via botLink.onError) ──────────────
+test('E: a brain decline (onError) on hero turn → decline (→ wait), no advice shown', () => {
+  const { cv, sent } = makeConverter();
+  cv.setPanelText(FULL_PANEL);
+  const g = scene(baseScene);
+  cv.onFrame(g, {}); cv.onFrame(g, {});         // settle → send seq 1
+  assert.strictEqual(sent.length, 1);
+  cv.botLink.onError({ kind: 'error', error: 'strict_block', seq: 1 }); // brain rejects
+  const r = cv.onFrame(g, {});
+  assert.ok(r.declined && r.declined.reason === 'brain-decline', 'surfaces a brain decline for the wait map');
+  assert.strictEqual(r.stale, false);
 });
