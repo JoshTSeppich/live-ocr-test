@@ -54,13 +54,23 @@
 
     // 1. Occupancy + per-seat stacks. read+confirmed ⇒ occupied/readable;
     //    stable no-read ⇒ empty seat (excluded); anything else ⇒ withhold.
+    //
+    // G-P1 / NET semantic (CC-B verdict + INTEGRATION_CONTRACT §G.1, §H.5 → NET):
+    // the displayed stack is ALREADY chips-behind (NET of the live bet/blind). The
+    // live brain (8766 → frozen runtime adapter) consumes `stacks` AS chips-behind
+    // and NEVER subtracts current_bets/blinds — §G.1: "do NOT report gross stacks."
+    // So we emit the read value VERBATIM here; the committed bet is carried
+    // separately in current_bets (step 6). DO NOT add the bet back ("gross") and
+    // DO NOT subtract it — either breaks the contract. (The "brain subtracts gross"
+    // premise came from the DEAD 8765 brain_bridge.py, ADR-0009-retired, which is
+    // NOT this path.) Pinned by gp1_net.test.cjs.
     const occupied = [];
     const stackChips = {};
     for (const seat of Regions.SEATS) {
       const ss = confirmed.stacks[seat] || { status: 'no-read' };
       if (ss.status === 'read' && ss.confirmed) {
         occupied.push(seat);
-        stackChips[seat] = toChips(ss.value, BB_CHIPS);
+        stackChips[seat] = toChips(ss.value, BB_CHIPS); // NET, verbatim — see note above
       } else if (ss.status === 'no-read' && ss.stable) {
         // genuinely empty seat — skip
       } else {
@@ -125,6 +135,12 @@
     const bbChips = BB_CHIPS;
     const potRead = toChips(pot.value, BB_CHIPS);
     const betsSum = current_bets.reduce((a, b) => a + b, 0);
+    // G-P2 LIVE-VALIDATION (pinned by gp2_pot.test.cjs): if the displayed pot
+    // ALREADY includes the front-of-seat bets/blinds, adding betsSum double-counts.
+    // CC-B P3 was inconclusive; P2 saw pot=1.5 at hand start while blinds also show
+    // as badges (hints inclusive). DO NOT flip the default on a guess — confirm at
+    // the first live blinds-only frame: readout 1.5 ⇒ set potIncludesCurrentBets:true;
+    // readout 0.0 ⇒ keep the default (false).
     const pot_committed = potIncl ? potRead : potRead + betsSum;
 
     const to_call = Math.max(0, maxBet - heroBetChips);
