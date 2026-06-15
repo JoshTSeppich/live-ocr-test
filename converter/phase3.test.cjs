@@ -265,3 +265,16 @@ test('validateActionHistory: a malformed entry drops the whole list to []', () =
   assert.deepStrictEqual(A.validateActionHistory([{ seat: 0, street: 0, type: 'bet', amount: 100 }, { seat: 1, street: 0, type: 'nope', amount: 5 }], 6), []);
   assert.strictEqual(A.validateActionHistory([{ seat: 0, street: 0, type: 'bet', amount: 100 }], 6).length, 1);
 });
+
+// ── §3b: reconciliation uses a ±0.02 BB band (2 chips), not exact equality ────
+test('history (§3b): a 2-chip (±0.02 BB) stack/bet mismatch is tolerated, not poisoned', () => {
+  const h = new Hist.ActionHistory();
+  // bet +300, stack −298 — a 2-chip slack from the BB 2-decimal display rounding
+  h.observe({ bets: { TR: 0 }, stacks: { TR: 10000 } }, { bets: { TR: 300 }, stacks: { TR: 9702 } }, map6);
+  assert.deepStrictEqual(h.get(), [{ seat: 2, street: 0, type: 'bet', amount: 300 }]);
+});
+test('history (§3b): beyond the band (3 chips off) still poisons to []', () => {
+  const h = new Hist.ActionHistory();
+  h.observe({ bets: { TR: 0 }, stacks: { TR: 10000 } }, { bets: { TR: 300 }, stacks: { TR: 9703 } }, map6); // off by 3
+  assert.deepStrictEqual(h.get(), []);
+});

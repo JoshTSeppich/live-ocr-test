@@ -28,7 +28,11 @@
 
   class ActionHistory {
     constructor(opts) {
-      this.tol = (opts && opts.tol != null) ? opts.tol : 1; // chip rounding slack
+      // §3b reconciliation tolerance: ±0.02 BB (= 2 chips at the canonical
+      // BB_CHIPS=100). Chico's BB display rounds to 2 decimals, so exact equality
+      // here rejects good frames. The stack/bet-delta reconciliation below uses
+      // this band, not exact equality.
+      this.tol = (opts && opts.tol != null) ? opts.tol : 2;
       this.reset();
     }
     reset() { this.entries = []; this._valid = true; this.street = 0; }

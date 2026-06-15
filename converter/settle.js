@@ -71,6 +71,14 @@
       this._settleRun = 0;
     }
 
+    // §3c mark-unstable-after-hero-acts: force-invalidate frame stability so a
+    // fresh settleN-consecutive-stable sequence is required before ANY read is
+    // trusted again. The converter calls this the instant hero's turn ends (hero
+    // acted) — it kills OpenHoldem's double-act / stale-read failure mode (reading
+    // the pre-action frame as if it were post-action). Same clearing as reset();
+    // named for intent at the call site.
+    markUnstable() { this.reset(); }
+
     // Record one field's read into its debounce slot; return the public view.
     _record(id, field, key) {
       const value = field ? field.value : null;
