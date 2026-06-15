@@ -111,7 +111,9 @@
         heroBet: this._heroBetBB,
         BB_CHIPS: this.cfg.BB_CHIPS,
         potIncludesCurrentBets: this.cfg.potIncludesCurrentBets,
-        badgeSeats: observe._badgeSeats, // optional; driver may attach badge detection
+        // Seat-order self-check derives its blind seats inside assembleRequest from
+        // this frame's confirmed reads (BB-anchored) — no dead _badgeSeats input.
+        // blindLabels (net-new per-seat "SB"/"BB" OCR) would slot in here later.
         actionHistory: this.history ? this.history.get() : [],
       };
       const asm = Assembler.assembleRequest(confirmed, ctx);

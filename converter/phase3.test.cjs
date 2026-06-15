@@ -141,25 +141,40 @@ test('mapSeats: clockwise indices, SB=button+1, BB=button+2', () => {
 test('mapSeats: hero not occupied → not ok (withhold)', () => {
   assert.strictEqual(Seats.mapSeats(['TL', 'TC'], 'TL').ok, false);
 });
-test('checkSeatOrder: badges on computed SB/BB → ok', () => {
-  const m = Seats.mapSeats(['TL', 'TC', 'TR', 'BR', 'BC', 'BL'], 'TC');
-  const c = Seats.checkSeatOrder(m, ['TR', 'BR']);
+test('checkSeatOrder: observed SB/BB on computed seats → ok', () => {
+  const m = Seats.mapSeats(['TL', 'TC', 'TR', 'BR', 'BC', 'BL'], 'TC'); // BTN TC → SB TR, BB BR
+  const c = Seats.checkSeatOrder(m, { sb: 'TR', bb: 'BR' });
   assert.strictEqual(c.ok, true);
 });
-test('checkSeatOrder: badges on the WRONG seats → loud warning', () => {
+test('checkSeatOrder: BB anchor alone (SB unread) on the computed seat → ok', () => {
   const m = Seats.mapSeats(['TL', 'TC', 'TR', 'BR', 'BC', 'BL'], 'TC');
-  const c = Seats.checkSeatOrder(m, ['BL', 'TL']); // not TR,BR
+  const c = Seats.checkSeatOrder(m, { bb: 'BR' }); // BB=button+2 disambiguates direction
+  assert.strictEqual(c.ok, true);
+});
+test('checkSeatOrder: BB anchor on the WRONG seat → loud MISMATCH (hard stop)', () => {
+  const m = Seats.mapSeats(['TL', 'TC', 'TR', 'BR', 'BC', 'BL'], 'TC');
+  const c = Seats.checkSeatOrder(m, { sb: 'BL', bb: 'TL' }); // BB should be BR
   assert.strictEqual(c.ok, false);
+  assert.strictEqual(c.mismatch, true);
+  assert.ok(!c.inconclusive);
   assert.match(c.warning, /SEAT-ORDER MISMATCH/);
 });
-test('checkSeatOrder: one badge visible → inconclusive (not a pass)', () => {
+test('checkSeatOrder: no BB anchor → inconclusive (withhold, not a pass)', () => {
   const m = Seats.mapSeats(['TL', 'TC', 'TR', 'BR', 'BC', 'BL'], 'TC');
-  const c = Seats.checkSeatOrder(m, ['TR']);
+  const c = Seats.checkSeatOrder(m, { sb: 'TR' }); // SB only, BB unread → no anchor
   assert.strictEqual(c.ok, false);
   assert.strictEqual(c.inconclusive, true);
+  assert.ok(!c.mismatch);
 });
-test('assembleRequest threads the seat-check when badgeSeats provided', () => {
-  const r = A.assembleRequest(snap(), Object.assign({}, baseCtx, { badgeSeats: ['TR', 'BR'] }));
+test('checkSeatOrder: BB anchor agrees but SB disagrees → inconclusive, not mismatch', () => {
+  const m = Seats.mapSeats(['TL', 'TC', 'TR', 'BR', 'BC', 'BL'], 'TC');
+  const c = Seats.checkSeatOrder(m, { sb: 'BL', bb: 'BR' }); // BB right, SB noisy
+  assert.strictEqual(c.ok, false);
+  assert.strictEqual(c.inconclusive, true);
+  assert.ok(!c.mismatch);
+});
+test('assembleRequest threads the seat-check when blindSeats provided', () => {
+  const r = A.assembleRequest(snap(), Object.assign({}, baseCtx, { blindSeats: { sb: 'TR', bb: 'BR' } }));
   assert.strictEqual(r.seatCheck.ok, true);
 });
 

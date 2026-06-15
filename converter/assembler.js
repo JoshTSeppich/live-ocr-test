@@ -41,8 +41,16 @@
   //   heroBet            : hero's KNOWN committed bet THIS STREET in BB (§0.10);
   //                        null ⇒ withhold (never OCR hero's own bet)
   //   BB_CHIPS, potIncludesCurrentBets
-  //   badgeSeats         : seats observed wearing a green blind badge (optional;
-  //                        drives the seat-order self-check)
+  //   blindSeats         : explicit observed {sb,bb} blind seats (optional override
+  //                        — e.g. future label OCR or a test). When absent, the
+  //                        seat-order self-check derives them from THIS frame's
+  //                        confirmed reads (BB-anchored; see Seats.deriveBlindSeats)
+  //                        so the gate runs live without the driver wiring anything.
+  //   blindLabels        : { seat: 'SB'|'BB' } per-seat label OCR (NET-NEW; null
+  //                        today). Passed through to the deriver as the preferred
+  //                        anchor when it exists. Follow-up: measure the label
+  //                        region geometry at the live pass (regions.js).
+  //   blindSeatsOpts     : deriveBlindSeats tuning (optional)
   //   actionHistory      : pre-validated Layer-4 entries (optional; else [])
   // Returns { ok:true, request, mapping, seatCheck } or
   //          { ok:false, withheld:true, missing:[...] }.
@@ -170,8 +178,19 @@
       action_history: validateActionHistory(ctx.actionHistory, mapping.table_size),
     };
 
-    const seatCheck = ctx.badgeSeats ? Seats.checkSeatOrder(mapping, ctx.badgeSeats) : null;
-    return { ok: true, request, mapping, seatCheck };
+    // Seat-order self-check (BB-anchored). Derive the observed blind seats from
+    // THIS frame's confirmed reads (board count + pot + per-seat bets in BB,
+    // hero's posted blind included) unless an explicit {sb,bb} override is given.
+    // The deriver's blinds-only guard makes the check WITHHOLD (not mismatch) on
+    // any non-blinds-only frame, so it is safe to run every assembly.
+    const blindSeats = ctx.blindSeats || Seats.deriveBlindSeats({
+      boardCount: board ? board.length : null,
+      potBB: pot.value,
+      bets: Object.fromEntries(occupied.map((s) => [s, betChips[s] / BB_CHIPS])),
+      labels: ctx.blindLabels || null,
+    }, ctx.blindSeatsOpts);
+    const seatCheck = Seats.checkSeatOrder(mapping, blindSeats);
+    return { ok: true, request, mapping, seatCheck, blindSeats };
   }
 
   // action_history is DISPOSABLE and OPTIONAL (§1, §2 Layer 4). Validate every

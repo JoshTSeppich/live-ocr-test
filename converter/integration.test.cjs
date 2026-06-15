@@ -34,7 +34,7 @@ test('end-to-end: Layer1 obs → SettleDebouncer(n=2) → assembleRequest', () =
   confirmed = deb.push(obs);
   assert.strictEqual(confirmed.settled, true);
   assert.strictEqual(confirmed.heroToAct, true);
-  const r = A.assembleRequest(confirmed, { heroBet: 0, badgeSeats: ['TR', 'BR'] });
+  const r = A.assembleRequest(confirmed, { heroBet: 0, blindSeats: { sb: 'TR', bb: 'BR' } });
   assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   assert.strictEqual(r.request.table_size, 6);
   assert.deepStrictEqual(r.request.board, ['8h', 'Jd', '2d']);
