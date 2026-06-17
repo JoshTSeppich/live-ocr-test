@@ -60,6 +60,21 @@ function cardChip(r, key) {
     React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: titleColor, lineHeight: '18px' } }, title),
     React.createElement('div', { style: { fontSize: 10, color: '#888' } }, sub));
 }
+// Draw a {rgba,w,h} crop into a visible <canvas>, scaled to maxW. This shows the
+// EXACT pixels the card matcher is fed — so you can see whether the region box is
+// on the cards (anchored correctly) or sitting in the felt (misplaced).
+function drawCrop(canvasEl, crop, maxW) {
+  if (!canvasEl) return;
+  const ctx = canvasEl.getContext('2d');
+  if (!crop || !crop.rgba || !crop.w || !crop.h) { if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height); return; }
+  const data = crop.rgba instanceof Uint8ClampedArray ? crop.rgba : new Uint8ClampedArray(crop.rgba);
+  const off = new OffscreenCanvas(crop.w, crop.h);
+  off.getContext('2d').putImageData(new ImageData(data, crop.w, crop.h), 0, 0);
+  const scale = Math.min(1, maxW / crop.w);
+  canvasEl.width = Math.max(1, Math.round(crop.w * scale));
+  canvasEl.height = Math.max(1, Math.round(crop.h * scale));
+  ctx.drawImage(off, 0, 0, canvasEl.width, canvasEl.height);
+}
 
 function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const [view, setView] = React.useState({ state: 'idle', advisorEvent: null, seatWarning: null, betWarning: null, callWarning: null });
@@ -90,6 +105,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const [cardReads, setCardReads] = React.useState({
     board: [null, null, null, null, null], hero: [null, null],
   });
+  // Visible previews of the actual board/hero crops fed to the matcher (so a
+  // misplaced region box is obvious — felt instead of cards).
+  const boardCanvasRef = React.useRef(null);
+  const heroCanvasRef = React.useRef(null);
 
   // Build the pipeline once.
   if (!convRef.current) {
@@ -179,6 +198,9 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           board: Array.from({ length: 5 }, (_, i) => bCells && bCells[i] ? readCardCell(cm, bCells[i]) : { state: 'none' }),
           hero: Array.from({ length: 2 }, (_, i) => hCells && hCells[i] ? readCardCell(cm, hCells[i]) : { state: 'none' }),
         });
+        // mirror the exact crops the matcher saw (reveals box misplacement)
+        drawCrop(boardCanvasRef.current, bc && bc.color, 360);
+        drawCrop(heroCanvasRef.current, hc && hc.color, 150);
       }
     } catch (e) { /* a debug panel must never break capture */ }
     // urgency proxy: count frames since hero's turn opened (resets between turns)
@@ -200,7 +222,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     setView({ state: conv.view.state, advisorEvent, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning });
   }, [heroBandRegion]);
 
-  const { status, start, stop, regionText } = useLiveOCR({
+  const { status, start, stop, regionText, videoSize } = useLiveOCR({
     intervalMs: 250,
     regions,                          // hero-anchored; updated each frame by onFrame
     preprocess: true,
@@ -263,6 +285,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         React.createElement('span', { style: S.mut }, `brain: ${linkStatus}`),
         React.createElement('span', { style: S.mut }, `state: ${view.state}`),
         React.createElement('span', { style: S.mut }, `anchor: ${anchorStatus}`),
+        React.createElement('span', { style: S.mut }, `video: ${videoSize ? videoSize.w + '×' + videoSize.h : '—'}`),
       ),
       // the advice — the whole point — rendered by the shared contract panel
       React.createElement('div', { style: S.advisorHost },
@@ -275,7 +298,14 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           ...cardReads.board.map((r, i) => cardChip(r, 'b' + i))),
         React.createElement('div', { style: S.cardsRow },
           React.createElement('span', { style: S.cardsLabel }, 'hero'),
-          ...cardReads.hero.map((r, i) => cardChip(r, 'h' + i)))),
+          ...cardReads.hero.map((r, i) => cardChip(r, 'h' + i))),
+        // the actual crops the matcher is fed — if these aren't ON the cards, the
+        // region box is misplaced (anchor/resolution), not a matcher problem
+        React.createElement('div', { style: { ...S.cardsRow, alignItems: 'flex-start' } },
+          React.createElement('span', { style: S.cardsLabel }, 'crop'),
+          React.createElement('div', null,
+            React.createElement('canvas', { ref: boardCanvasRef, style: { display: 'block', border: '1px solid #2a2a2a', background: '#000' } }),
+            React.createElement('canvas', { ref: heroCanvasRef, style: { display: 'block', marginTop: 4, border: '1px solid #2a2a2a', background: '#000' } })))),
       // the seat-order self-check warning (top live-validation item) — loud
       view.seatWarning && React.createElement('div', { style: S.seatwarn }, view.seatWarning),
       // hero-bet stack-delta vs bet-badge drift (to_call ground-truth check)
