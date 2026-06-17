@@ -56,38 +56,39 @@
   // §0.6 — pot readout ("Pot: N.NN BB").
   const POT_BOX = box(1361, 542, 322, 81);
 
-  // Card regions. §0 referenced the card pipeline (MultiSignatureMatcher) but
-  // never captured the rects — these were MEASURED the same way as the stack/bet
-  // boxes (card-face connected components @ 20260603_121222), validated on real
-  // pixels: a 5-card river frame fixes the board at x=1053→1721, pitch ~167,
-  // y=789, h=230; the matcher round-trips + cross-frame-matches all cells at
-  // confidence 1.0, and empty flop cells fall to ~0.75 (< the 0.85 threshold),
-  // so board card COUNT drives street correctly. Slice each into N even cells
-  // (engine cardCellsFromRegion style: width / N).
+  // Card regions — RE-MEASURED 2026-06-17 from the capture corpus, at native
+  // 2940×1846 (= REF_FRAME). These rects feed the per-card STRIP cropper
+  // (docs/PIP_CROP_GEOMETRY.md): the live path crops each card's 55×130 corner
+  // strip (rank + corner pip), anchored at the white-body left + the white top
+  // found by scanning DOWN from the box's y. So each box's x/y is chosen to be
+  // the strip ANCHOR + scan-start, not a loose bounding rect.
   //
-  // ⚠️ KNOWN-BAD CARD GEOMETRY — these two BOXES are a working-tree REGRESSION.
-  //   The comment above (x 1053→1721, pitch 167, "5 cells of 167 px") and the
-  //   capture corpus DISAGREE with the literals below:
-  //     • corpus board_cards.json (2940×1846): 5 cards, bbox_x 1023→1887,
-  //       pitch 166–167, body-left = bbox_x+30 ⇒ first card body 1053, span ≈835,
-  //       y≈765, h≈132. The committed value box(1053,789,835,230) matches that;
-  //       this working-tree box(1160,728,620,201) does NOT — 620/5 = 124 ≠ 167,
-  //       so 5 cards at pitch 167 cannot fit (the literal contradicts its own
-  //       "5 cells of 167 px" comment).
-  //     • corpus hero_hands.json: hole cards OVERLAP — rear occluded to a 55px
-  //       sliver at bbox_x≈1360, front≈1415 w165, y≈1235, h≈143; span ≈222.
-  //       The committed value box(1359,1238,222,158) matches; this working-tree
-  //       box(1298,1348,230,201) does NOT.
-  //   NOT fixed here: per the live-wiring plan the card-strip slicer is DEFERRED
-  //   and these boxes must be RE-MEASURED against a fresh 2940×1846 frame before
-  //   the slicer is built (reconcile to the corpus numbers above). Until then no
-  //   card slicer consumes them, so the bad values affect nothing live. Do NOT
-  //   build the per-card strip crop against these literals. (Also note: this
-  //   whole file — the hero-anchor math included — is currently uncommitted
-  //   working-tree work; HEAD has neither the anchor code nor these box edits.)
-  const BOARD_BOX = box(1160, 728, 620, 201);   // ⚠ REGRESSION — see note; corpus = box(1053,789,835,230)
+  // PROVENANCE (measured from real card pixels; reconciled to the detector
+  // bboxes in poker-vision-analysis/output/{board_cards,hero_hands}.json):
+  //   BOARD — capture 20260523_181823, 40 five-card frames. 5 cards, detector
+  //     bbox_x 1023→1690 (last right edge 1886), pitch 167 (range 166–167).
+  //     White body-left = bbox_x + RANK_MARGIN(30) ⇒ first body 1053. White TOP
+  //     = bbox_y(765) + 24 = 789 (exact across all 40). Strip 130 tall ⇒ bottom
+  //     919. So BOARD_BOX = (x=1053 body-left, y=765 scan-start [24px of felt
+  //     headroom above the white top], w=835=5×pitch [even-slicing → 5 cells of
+  //     167, each cell-left landing on a card body-left ±1px], h=200 [covers the
+  //     789→919 strip + margin]).
+  //   HERO — capture 20260524_224749, 22 two-card hands. Hole cards OVERLAP:
+  //     the REAR card is occluded to a 55px exposed sliver at bbox_x 1360; the
+  //     FRONT card starts at 1415 (= rear_x + 55, exact) and runs to 1580. White
+  //     TOP = bbox_y(1235) + 6 = 1241 (exact across all 44 cards). So
+  //     HERO_HOLE_BOX = (x=1360 rear exposed-left, y=1235 scan-start, w=220
+  //     [bounds rear+front to 1580], h=160 [covers the 1241→1371 strip; card
+  //     bottom 1378]). NOTE: this pair is NOT evenly sliceable — the overlap
+  //     slicer anchors the REAR strip at box-left and the FRONT strip at
+  //     box-left + 55·(pitch/167); HERO_HOLE_CELLS stays 2 as the card COUNT.
+  //   Both captures are full 2940×1846 (verified by PNG read); the table scales
+  //   proportionally without reflow (ADR_hero_anchor_regions), so the two
+  //   sessions share one px reference, and these boxes place consistently with
+  //   the numeric region boxes (pot above board; hole above the BC stack).
+  const BOARD_BOX = box(1053, 765, 835, 200);   // 5 cells of 167; strip anchor=(body-left,scan-start)
   const BOARD_CELLS = 5;
-  const HERO_HOLE_BOX = box(1298, 1348, 230, 201); // ⚠ REGRESSION — see note; corpus = box(1359,1238,222,158)
+  const HERO_HOLE_BOX = box(1360, 1235, 220, 160); // overlapped pair; rear strip @left, front @left+55
   const HERO_HOLE_CELLS = 2;
 
   // §0.8 — button-puck slot anchors (puck CENTERS, not boxes). The puck is
