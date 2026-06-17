@@ -24,22 +24,105 @@
 
   const Regions = (typeof require === 'function') ? require('./regions.js') : (root && root.PokerRegions);
 
-  // Slice a {rgba,w,h} crop into n even vertical cells (engine cardCellsFromRegion
-  // style: floor(w/n), last cell gets the remainder).
-  function sliceCells(crop, n) {
+  // ─── per-card CORNER-STRIP cropping (docs/PIP_CROP_GEOMETRY.md) ──────────────
+  // The suit-pip classifier (engine.js Component 4) and the rank/colour hashes
+  // are CALIBRATED to one crop: a card's 55×130 left-corner strip (rank + corner
+  // pip), anchored at the WHITE-BODY LEFT and the WHITE TOP, at native pitch 167.
+  // So the live path must feed match() THAT strip, not a full-height cell. This
+  // replaces the old even-slice (which fed full cards — wrong input for the pip
+  // classifier). Strip size scales with the card pitch at the live resolution
+  // (strip_w = 55/167·pitch, strip_h = 130/167·pitch); the matcher's hash
+  // normalises size, but native is exact 55×130 (= the template source).
+  const STRIP_W_NATIVE = 55, STRIP_H_NATIVE = 130, PITCH_NATIVE = 167;
+
+  const _lum = (rgba, w, x, y) => { const i = (y * w + x) * 4; return (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3; };
+  // fraction of rows in [y0,y1) at column x that are bright (lum > 150)
+  function _colBright(crop, x, y0, y1) {
+    let n = 0, tot = 0;
+    for (let y = y0; y < y1; y++) { tot++; if (_lum(crop.rgba, crop.w, x, y) > 150) n++; }
+    return tot ? n / tot : 0;
+  }
+  // fraction of cols in [x0,x1) at row y that are bright
+  function _rowBright(crop, x0, x1, y) {
+    let n = 0, tot = 0;
+    for (let x = x0; x < x1; x++) { tot++; if (_lum(crop.rgba, crop.w, x, y) > 150) n++; }
+    return tot ? n / tot : 0;
+  }
+  // First column (scanning right from xFrom, bounded by xTo) whose vertical
+  // brightness over the crop exceeds 0.4 — the card's white-body LEFT edge.
+  // (The felt→white transition; the rank glyph sits inset, so the very-left card
+  // column is solid white margin. Adjacent board cards abut, so we never scan
+  // LEFT of the cell start — that would latch onto the previous card's tail.)
+  function _whiteLeft(crop, xFrom, xTo) {
+    for (let x = xFrom; x < xTo; x++) if (_colBright(crop, x, 0, crop.h) > 0.4) return x;
+    return xFrom;
+  }
+  // First row whose brightness across [xL, xR) exceeds 0.5 — the white TOP edge
+  // (cardTop scan; felt above the card is dark). Mirrors the calibration scan.
+  function _whiteTop(crop, xL, xR) {
+    for (let y = 0; y < crop.h; y++) if (_rowBright(crop, xL, Math.min(xR, crop.w), y) > 0.5) return y;
+    return 0;
+  }
+  // Copy an sw×sh RGBA strip from (sx,sy); rows/cols past the crop are zero-padded.
+  function _cropStrip(crop, sx, sy, sw, sh) {
+    const out = new Uint8Array(sw * sh * 4);
+    for (let y = 0; y < sh; y++) {
+      const cy = sy + y; if (cy < 0 || cy >= crop.h) continue;
+      for (let x = 0; x < sw; x++) {
+        const cx = sx + x; if (cx < 0 || cx >= crop.w) continue;
+        const s = (cy * crop.w + cx) * 4, d = (y * sw + x) * 4;
+        out[d] = crop.rgba[s]; out[d + 1] = crop.rgba[s + 1]; out[d + 2] = crop.rgba[s + 2]; out[d + 3] = crop.rgba[s + 3];
+      }
+    }
+    return { rgba: out, w: sw, h: sh };
+  }
+  // One card's strip: find white-left in [xFrom,xTo), white-top over the strip
+  // columns, crop sw×sh. Returns {rgba,w,h}.
+  function _cardStrip(crop, xFrom, xTo, sw, sh) {
+    const wl = _whiteLeft(crop, xFrom, xTo);
+    const wt = _whiteTop(crop, wl, wl + sw);
+    return _cropStrip(crop, wl, wt, sw, sh);
+  }
+
+  // Slice a card-region {rgba,w,h} crop into n per-card 55×130-proportioned corner
+  // strips for match(). opts.layout:
+  //   'board' (default) — n non-overlapping cards; even cells, white-left + cardTop
+  //                       scan within each cell (cells abut → no left margin).
+  //   'hero'            — 2 OVERLAPPED hole cards; the REAR card is occluded to a
+  //                       ~strip-wide exposed sliver at the region's left, the
+  //                       FRONT card begins one strip-width to its right (front_x −
+  //                       rear_x == exposed width, measured). Anchor rear on its
+  //                       exposed left corner, front on its own left corner.
+  function sliceCells(crop, n, opts) {
     if (!crop || n < 1) return null;
-    const cw = Math.floor(crop.w / n);
+    opts = opts || {};
+    const layout = opts.layout || 'board';
+    const nativeW = layout === 'hero' ? Regions.HERO_HOLE_BOX.w : Regions.BOARD_BOX.w;
+    const f = nativeW ? crop.w / nativeW : 1;           // live/native scale of this region
+    const sw = Math.max(1, Math.round(STRIP_W_NATIVE * f));
+    const sh = Math.max(1, Math.round(STRIP_H_NATIVE * f));
+
+    if (layout === 'hero') {
+      // rear: exposed sliver at the region's left corner
+      const rl = _whiteLeft(crop, 0, crop.w);
+      const rear = _cardStrip(crop, rl, rl + sw, sw, sh);
+      // front: begins one exposed-width (== strip width) to the right of the rear
+      const fl = rl + sw;
+      const front = _cardStrip(crop, fl, Math.min(fl + sw, crop.w), sw, sh);
+      return [rear, front];
+    }
+
+    // Board cards sit at FIXED, evenly-pitched slots (measured: residual ≤1px
+    // from a uniform 167-grid). So the slot left = cell left IS the card's left
+    // edge (= the calibration anchor bbox_x+30); a white-scan would only overshoot
+    // past the thin dark inter-card border into the body. Anchor at cell-left,
+    // scan the white TOP within the strip columns. (Pass xTo==xFrom so _cardStrip
+    // skips the horizontal scan and keeps cell-left.)
+    const cellW = crop.w / n;
     const cells = [];
     for (let i = 0; i < n; i++) {
-      const sx = i * cw;
-      const sw = i === n - 1 ? crop.w - sx : cw;
-      const out = new Uint8Array(sw * crop.h * 4);
-      for (let y = 0; y < crop.h; y++) {
-        const srcStart = (y * crop.w + sx) * 4;
-        const dstStart = y * sw * 4;
-        for (let j = 0; j < sw * 4; j++) out[dstStart + j] = crop.rgba[srcStart + j];
-      }
-      cells.push({ rgba: out, w: sw, h: crop.h });
+      const cellL = Math.round(i * cellW);
+      cells.push(_cardStrip(crop, cellL, cellL, sw, sh));
     }
     return cells;
   }
@@ -80,7 +163,7 @@
       heroBet: deps.heroBet,
       getColor: colorOf,
       getBinarized: binOf,
-      getCardCells: (id, n) => sliceCells(colorOf(id), n),
+      getCardCells: (id, n) => sliceCells(colorOf(id), n, { layout: id === 'hero_hole' ? 'hero' : 'board' }),
     };
     const observeOpts = scaledButtonOpts(dims.videoW, dims.videoH);
     return { frame, observeOpts };

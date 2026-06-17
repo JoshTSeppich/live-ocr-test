@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const E = require('../engine.js');
 const Reg = require('./regions.js');
+const F = require('./frame.js');
 const { SettleDebouncer } = require('./settle.js');
 const { HandLifecycle } = require('./handBoundary.js');
 const { ActionHistory } = require('./history.js');
@@ -37,20 +38,46 @@ function strip(value) { // binarized strip of `value` chars with light gaps
   chars.forEach((ch, i) => { const g = glyph(ch); const x0 = G + i * (CW + G); for (let y = 0; y < 20; y++) for (let x = 0; x < CW; x++) { const si = (y * 10 + x) * 4; if (g.rgba[si] === 0) setPx(s, x0 + x, y + 1, [0, 0, 0]); } });
   return s;
 }
-// card crop: a UNIQUE bright horizontal band per code (band height = its index),
-// so cards are maximally separable and empty felt (no band) is far from all.
+// Card crops at NATIVE region scale so they round-trip through the real per-card
+// strip cropper (frame.js sliceCells): each card is a WHITE body (felt above, so
+// the cardTop scan fires) with a code-UNIQUE dark mark in its 55-wide left-corner
+// strip — distinct from every other code and from empty felt (all-dark). The
+// orchestrator tests read cards via the live slicer, so teach from the SAME
+// strips it produces (hash normalises the board↔hero size difference).
 const CODE_INDEX = { '8h': 0, 'Jd': 1, '2d': 2, 'As': 3, 'Kd': 4 };
-function cardCrop(code) {
-  const c = crop(40, 60, DARK); const i = CODE_INDEX[code]; // ~50% fill, very distinct from empty felt
-  if (i === 0) rect(c, 0, 0, 40, 30, WHITE);
-  else if (i === 1) rect(c, 0, 30, 40, 30, WHITE);
-  else if (i === 2) rect(c, 0, 0, 20, 60, WHITE);
-  else if (i === 3) rect(c, 20, 0, 20, 60, WHITE);
-  else for (let y = 0; y < 60; y++) for (let x = 0; x < 40; x++) if (((x >> 3) + (y >> 3)) % 2 === 0) setPx(c, x, y, WHITE);
+const SLOT = Reg.BOARD_BOX.w / Reg.BOARD_CELLS; // 167 — one card slot
+const CARD_TOP = 24, CARD_BODY_H = 130;          // white body offset/height (felt above)
+// paint a white card with its code-unique corner mark at column x0 on felt crop c
+function paintCard(c, x0, code) {
+  rect(c, x0, CARD_TOP, Math.min(SLOT, c.w - x0), Math.min(CARD_BODY_H, c.h - CARD_TOP), WHITE);
+  const i = CODE_INDEX[code], sx = x0 + 6, t = CARD_TOP;
+  if (i === 0) rect(c, sx, t + 12, 44, 22, DARK);
+  else if (i === 1) rect(c, sx, t + 54, 44, 22, DARK);
+  else if (i === 2) rect(c, sx, t + 96, 44, 22, DARK);
+  else if (i === 3) rect(c, sx, t + 12, 14, 106, DARK);
+  else { rect(c, sx, t + 12, 44, 18, DARK); rect(c, sx, t + 100, 44, 18, DARK); }
+}
+// teach each code from the board-layout strip the slicer extracts at slot 0
+function teachCards(cm, codes) {
+  for (const code of codes) {
+    const s = F.sliceCells(rowOf([code], Reg.BOARD_CELLS), Reg.BOARD_CELLS, { layout: 'board' })[0];
+    cm.teach(code, s.rgba, s.w, s.h);
+  }
+}
+// board row: cards left-aligned at fixed slots; width = BOARD_BOX.w (so f=1)
+function rowOf(codes, total) {
+  const c = crop(Math.round(SLOT * total), Reg.BOARD_BOX.h, DARK);
+  codes.forEach((code, i) => paintCard(c, Math.round(i * SLOT), code));
   return c;
 }
-function teachCards(cm, codes) { for (const code of codes) cm.teach(code, cardCrop(code).rgba, 40, 60); }
-function rowOf(codes, total) { const W = 40 * total, c = crop(W, 60, DARK); codes.forEach((code, i) => { const cc = cardCrop(code); for (let y = 0; y < 60; y++) for (let x = 0; x < 40; x++) { const si = (y * 40 + x) * 4; setPx(c, i * 40 + x, y, [cc.rgba[si], cc.rgba[si + 1], cc.rgba[si + 2]]); } }); return c; }
+// hero hole: OVERLAPPED pair — rear at the left, front one exposed-width (== one
+// strip width, 55 native) to its right, painted on top (matches the live slicer).
+function holeRow(codes) {
+  const c = crop(Reg.HERO_HOLE_BOX.w, Reg.HERO_HOLE_BOX.h, DARK);
+  if (codes[0]) paintCard(c, 0, codes[0]);
+  if (codes[1]) paintCard(c, 55, codes[1]);
+  return c;
+}
 
 // Build getCrops for a scenario. stacks: {seat:bbValue}, betTR, pot, board[], hole[], button, timerFrac, heroTurn.
 function scene(sc) {
@@ -64,7 +91,7 @@ function scene(sc) {
     if (id === 'timer') return C(crop(420, 13, sc.timerFrac >= 0.99 ? GREEN : DARK)); // simple full/empty
     if (id === 'action_panel') { const c = crop(120, 60, DARK); if (sc.heroTurn) rect(c, 10, 10, 60, 30, RED); return C(c); }
     if (id === 'board') return C(rowOf(sc.board, 5));
-    if (id === 'hero_hole') return C(rowOf(sc.hole, 2));
+    if (id === 'hero_hole') return C(holeRow(sc.hole));
     return null;
   };
 }

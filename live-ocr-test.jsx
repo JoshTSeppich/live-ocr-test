@@ -598,25 +598,23 @@ function LiveOCRTest() {
     useLiveOCR({ intervalMs: interval, regions, onEvent: handleEvent,
                  preprocess, binarizeThreshold, ocrMaxWidth, recognizeFast });
 
-  // Helper: slice a region's pixels into N evenly-spaced card cells.
+  // Helper: crop a region's pixels into N per-card CORNER STRIPS for match().
+  // Unified on the strip path (docs/PIP_CROP_GEOMETRY.md) via PokerFrame.sliceCells
+  // — the SAME cropper the converter uses — so teach/match here produce the exact
+  // 55×130-proportioned strips the suit classifier (and the seeded strip
+  // templates) are calibrated to. A /hand|hole/ region is the OVERLAPPED hero pair
+  // (rear exposed-left + front); anything else is even-pitched board cards.
   const cardCellsFromRegion = React.useCallback((regionId, n) => {
     const px = getRegionPixels && getRegionPixels(regionId);
     if (!px) return null;
-    const cellW = Math.floor(px.w / n);
-    const cells = [];
-    for (let i = 0; i < n; i++) {
-      const sx0 = i * cellW;
-      const sw = (i === n - 1) ? (px.w - sx0) : cellW;
-      const cellData = new Uint8Array(sw * px.h * 4);
-      for (let y = 0; y < px.h; y++) {
-        const srcStart = (y * px.w + sx0) * 4;
-        const dstStart = y * sw * 4;
-        for (let j = 0; j < sw * 4; j++) cellData[dstStart + j] = px.imageData[srcStart + j];
-      }
-      cells.push({ imageData: cellData, w: sw, h: px.h });
-    }
-    return cells;
-  }, [getRegionPixels]);
+    const PF = (typeof window !== 'undefined') && window.PokerFrame;
+    if (!PF || !PF.sliceCells) return null; // strip cropper not loaded yet
+    const region = regions.find((r) => r.id === regionId);
+    const name = (region && region.name) || regionId || '';
+    const layout = /hand|hole/i.test(name) ? 'hero' : 'board';
+    const strips = PF.sliceCells({ rgba: px.imageData, w: px.w, h: px.h }, n, { layout });
+    return strips && strips.map((s) => ({ imageData: s.rgba, w: s.w, h: s.h }));
+  }, [getRegionPixels, regions]);
 
   // ── Digit teach (Component 3) ─────────────────────────────────────────────
   // Teach the pot region's glyphs against a verified ground-truth string. Reads
