@@ -48,6 +48,28 @@ function readCardCell(matcher, cell) {
 // change-detect key (ignores confidence jitter) + compact record for the log
 const cellRecKey = (r) => (r ? r.state + (r.code || '') : 'none');
 const cellRec = (r) => (r ? { state: r.state, code: r.code || null, conf: r.conf != null ? +r.conf.toFixed(3) : null } : { state: 'none' });
+// PNG data-URL of a strip cell, so each record entry keeps the actual picture
+// the code was matched from (checkable later). Strips are small (≈55×130).
+function stripToDataURL(cell) {
+  if (!cell || !cell.rgba || !cell.w || !cell.h) return null;
+  try {
+    const data = cell.rgba instanceof Uint8ClampedArray ? cell.rgba : new Uint8ClampedArray(cell.rgba);
+    const c = document.createElement('canvas'); c.width = cell.w; c.height = cell.h;
+    c.getContext('2d').putImageData(new ImageData(data, cell.w, cell.h), 0, 0);
+    return c.toDataURL('image/png');
+  } catch (_) { return null; }
+}
+// one card record = code/conf/state + the crop image
+const cellRecImg = (r, cell) => Object.assign(cellRec(r), { img: stripToDataURL(cell) });
+// Persist a capped tail to localStorage; crop images are heavy, so shrink the
+// stored window on a quota error rather than failing.
+const READS_KEY = 'card-reads-log';
+function persistReads(log) {
+  for (let n = Math.min(log.length, 120); ; n = Math.floor(n / 2)) {
+    try { localStorage.setItem(READS_KEY, JSON.stringify(log.slice(-n))); return; }
+    catch (_) { if (n <= 0) { try { localStorage.removeItem(READS_KEY); } catch (__) {} return; } }
+  }
+}
 // One card chip element for the live readout (read-only).
 function cardChip(r, key) {
   r = r || { state: 'none' };
@@ -208,14 +230,17 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         // mirror the exact crops the matcher saw (reveals box misplacement)
         drawCrop(boardCanvasRef.current, bc && bc.color, 360);
         drawCrop(heroCanvasRef.current, hc && hc.color, 150);
-        // record on CHANGE (not every frame): a clean timeline of what matched
-        const key = boardReads.map(cellRecKey).join(',') + '|' + heroReads.map(cellRecKey).join(',') + '|' + anchorStatusRef.current;
+        // record on CARD change (not anchor flips, which would spam): a clean
+        // timeline of what matched, each entry keeping the crop images.
+        const key = boardReads.map(cellRecKey).join(',') + '|' + heroReads.map(cellRecKey).join(',');
         if (key !== lastLogKeyRef.current) {
           lastLogKeyRef.current = key;
           const log = cardLogRef.current;
           log.push({ t: Date.now(), anchor: anchorStatusRef.current, video: (vw && vh) ? [vw, vh] : null,
-            board: boardReads.map(cellRec), hero: heroReads.map(cellRec) });
-          if (log.length > 5000) log.shift();
+            board: boardReads.map((r, i) => cellRecImg(r, bCells && bCells[i])),
+            hero: heroReads.map((r, i) => cellRecImg(r, hCells && hCells[i])) });
+          if (log.length > 1000) log.shift(); // crop images are heavy — cap memory
+          persistReads(log);                  // survive reloads (capped tail)
           setRecordCount(log.length);
         }
       }
@@ -279,6 +304,17 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
 
   React.useEffect(() => () => { try { convRef.current && convRef.current.botLink.close(); } catch (e) {} }, []);
 
+  // Restore a previously-persisted card-read record (survives reloads).
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(READS_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length) { cardLogRef.current = arr; setRecordCount(arr.length); }
+      }
+    } catch (_) { /* corrupt/absent — start fresh */ }
+  }, []);
+
   // Download / clear the card-read record.
   const downloadReads = React.useCallback(() => {
     try {
@@ -291,7 +327,9 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     } catch (e) { console.warn('[card-reads] download failed:', e); }
   }, []);
   const clearReads = React.useCallback(() => {
-    cardLogRef.current = []; lastLogKeyRef.current = ''; setRecordCount(0);
+    cardLogRef.current = []; lastLogKeyRef.current = '';
+    try { localStorage.removeItem(READS_KEY); } catch (_) {}
+    setRecordCount(0);
   }, []);
 
   // ── display (inline styles — self-contained, no build wiring) ──────────────
