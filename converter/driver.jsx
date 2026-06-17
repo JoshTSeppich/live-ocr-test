@@ -24,6 +24,43 @@ function rgbaToCanvas(rgba, w, h) {
   return c;
 }
 
+// ── Live card-readout (read-only debug panel) ───────────────────────────────
+// Classifies one card-strip cell exactly as the pipeline does: same strip crop
+// (PokerFrame.sliceCells), same matcher, same 0.85 confidence gate as
+// observation.readCardCells. Returns a small display record per card.
+const CARD_MIN_CONF = 0.85; // == observation.readCardCells default
+const SUIT_GLYPH = { h: '♥', d: '♦', s: '♠', c: '♣' };
+function fmtCardCode(code) {
+  if (!code || code.length < 2) return { text: code || '?', red: false };
+  const rank = code[0] === 'T' ? '10' : code[0];
+  const suit = code[1];
+  return { text: rank + (SUIT_GLYPH[suit] || suit), red: suit === 'h' || suit === 'd' };
+}
+function readCardCell(matcher, cell) {
+  if (!cell) return { state: 'none' };
+  const m = matcher.match(cell.rgba, cell.w, cell.h);
+  if (!m || m.confidence == null || m.confidence < CARD_MIN_CONF) {
+    return { state: 'no-read', conf: m ? m.confidence : 0, guess: m ? m.card : null };
+  }
+  // confident rank+colour; suit may still abstain (never a confident wrong suit)
+  return { state: m.suitConfident ? 'read' : 'abstain', conf: m.confidence, code: m.card, alts: m.suitAlternatives };
+}
+// One card chip element for the live readout (read-only).
+function cardChip(r, key) {
+  r = r || { state: 'none' };
+  const pct = r.conf != null ? Math.round(r.conf * 100) + '%' : '';
+  const base = { width: 64, padding: '4px 2px', borderRadius: 5, textAlign: 'center',
+    border: '1px solid #2a2a2a', background: '#161616', font: '13px ui-monospace, monospace' };
+  let title, titleColor, sub;
+  if (r.state === 'read') { const f = fmtCardCode(r.code); title = f.text; titleColor = f.red ? '#ff6b6b' : '#e8e8e8'; sub = pct; }
+  else if (r.state === 'abstain') { const f = fmtCardCode(r.code); title = f.text + '?'; titleColor = '#e8c000'; sub = 'abstain ' + pct; }
+  else if (r.state === 'no-read') { title = '—'; titleColor = '#666'; sub = 'no-read' + (pct ? ' ' + pct : ''); }
+  else { title = '·'; titleColor = '#444'; sub = ''; }
+  return React.createElement('div', { key, style: base },
+    React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: titleColor, lineHeight: '18px' } }, title),
+    React.createElement('div', { style: { fontSize: 10, color: '#888' } }, sub));
+}
+
 function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const [view, setView] = React.useState({ state: 'idle', advisorEvent: null, seatWarning: null, betWarning: null, callWarning: null });
   const [linkStatus, setLinkStatus] = React.useState('idle');
@@ -49,6 +86,11 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const heroBusyRef = React.useRef(false);  // at most one band OCR in flight
   const heroDetRef = React.useRef(null);    // { det, fresh } — latest hero detection
 
+  // Live card-readout: what the card pipeline matches each frame (read-only).
+  const [cardReads, setCardReads] = React.useState({
+    board: [null, null, null, null, null], hero: [null, null],
+  });
+
   // Build the pipeline once.
   if (!convRef.current) {
     const debouncer = new PokerSettle.SettleDebouncer({ n: 2, settleN: 2 });
@@ -66,7 +108,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       debouncer, lifecycle, history, botLink, escalator, digitMatcher, cardMatcher,
     });
     botLink.connect();
-    convRef.current = { conv, botLink };
+    convRef.current = { conv, botLink, cardMatcher };
   }
 
   // Feed every captured frame into the converter, then publish its view.
@@ -122,6 +164,23 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     // feed the latest action-panel OCR text (from Tesseract path) for check-vs-call
     conv.setPanelText(regionTextRef.current && regionTextRef.current.action_panel || null);
     const res = conv.onFrame(getCrops, dims); // res.request = the assembled snapshot
+
+    // ── Live card-readout (read-only): classify each board/hero strip exactly as
+    // the pipeline does — same cropper, same matcher, same 0.85 gate — so the
+    // panel shows what the card pipeline matches this frame.
+    try {
+      const PF = typeof window !== 'undefined' && window.PokerFrame;
+      const cm = convRef.current.cardMatcher;
+      if (PF && PF.sliceCells && cm) {
+        const bc = getCrops('board'), hc = getCrops('hero_hole');
+        const bCells = bc && bc.color ? PF.sliceCells(bc.color, 5, { layout: 'board' }) : null;
+        const hCells = hc && hc.color ? PF.sliceCells(hc.color, 2, { layout: 'hero' }) : null;
+        setCardReads({
+          board: Array.from({ length: 5 }, (_, i) => bCells && bCells[i] ? readCardCell(cm, bCells[i]) : { state: 'none' }),
+          hero: Array.from({ length: 2 }, (_, i) => hCells && hCells[i] ? readCardCell(cm, hCells[i]) : { state: 'none' }),
+        });
+      }
+    } catch (e) { /* a debug panel must never break capture */ }
     // urgency proxy: count frames since hero's turn opened (resets between turns)
     pollRef.current = conv.view.state === 'idle' ? 0 : pollRef.current + 1;
     // map the live converter state + parsed brain reply → the advisor's event shape
@@ -192,6 +251,9 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     advisorHost: { height: 200, marginBottom: 8, border: '1px solid #222', borderRadius: 6, overflow: 'hidden' },
     seatwarn: { fontSize: 13, color: '#111', background: '#e8c000', padding: 8, borderRadius: 6, marginTop: 8 },
     mut: { color: '#888' },
+    cards: { marginTop: 8, padding: 8, border: '1px solid #222', borderRadius: 6, background: '#0d0d0d' },
+    cardsRow: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 },
+    cardsLabel: { width: 44, color: '#888', fontSize: 12 },
   };
   return (
     React.createElement('div', { style: S.panel },
@@ -205,6 +267,15 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       // the advice — the whole point — rendered by the shared contract panel
       React.createElement('div', { style: S.advisorHost },
         React.createElement(AdvisorPanel, { event: view.advisorEvent, muted: false, onToggleMute: () => {} })),
+      // live card-readout (read-only): what the card pipeline matches each frame
+      React.createElement('div', { style: S.cards },
+        React.createElement('div', { style: { color: '#aaa', fontSize: 12 } }, 'card readout (live)'),
+        React.createElement('div', { style: S.cardsRow },
+          React.createElement('span', { style: S.cardsLabel }, 'board'),
+          ...cardReads.board.map((r, i) => cardChip(r, 'b' + i))),
+        React.createElement('div', { style: S.cardsRow },
+          React.createElement('span', { style: S.cardsLabel }, 'hero'),
+          ...cardReads.hero.map((r, i) => cardChip(r, 'h' + i)))),
       // the seat-order self-check warning (top live-validation item) — loud
       view.seatWarning && React.createElement('div', { style: S.seatwarn }, view.seatWarning),
       // hero-bet stack-delta vs bet-badge drift (to_call ground-truth check)
