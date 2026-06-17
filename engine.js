@@ -308,11 +308,135 @@ function hashCardColor(rgba, w, h) {
   return out;
 }
 
+// ─── suit-pip shape classifier (Component 4) ──────────────────────────────
+// The 16×24 card hash under-resolves the tiny corner suit pip, so same-color
+// pairs confuse (♥↔♦, ♠↔♣ — color/brightness/edge hashes are near-identical;
+// only the pip shape differs). Silhouette template overlap CANNOT separate the
+// pip at this scale (a normalized club and spade overlap ~0.9), so this reads
+// it by SHAPE FEATURES, mirroring poker-vision-analysis card_reader's hero
+// corner-pip method. Calibrated against every clean card instance in the
+// capture corpus (board + occluded hero rears + fronts, 704 instances):
+//   ♥ vs ♦  — top-band width of the pip bbox: heart's two lobes span the full
+//             width (≥0.89 measured), a diamond tapers to a point (≤0.30).
+//   ♣ vs ♠  — max horizontal ink-segments across the mid band: a club's three
+//             lobes give 3 runs, a spade is solid (1 run).
+// It NEVER guesses confidently: outside the measured-safe bands it ABSTAINS
+// (suit:null), so a same-color read is either correct or an explicit 2-way.
+//
+// PIP-CROP GEOMETRY CONTRACT — the rgba,w,h the caller must feed is the card's
+// left-corner strip, anchored at the card's white top-left corner, same
+// proportions the templates use (≈55w × 130h). The pip sits in the lower band;
+// this reads rows [PIP_Y0_FRAC·h .. h] across the full width. See
+// docs/PIP_CROP_GEOMETRY.md for the exact rows/cols/anchor the live region
+// must satisfy.
+const PIP_Y0_FRAC = 0.569;        // pip band start (= 74/130 of the strip height)
+const PIP_TOPBAND = 0.22;         // top fraction of the pip bbox measured for ♥/♦
+const PIP_HEART_MIN = 0.75;       // top-width ≥ → heart   (corpus hearts ≥ 0.89)
+const PIP_DIAMOND_MAX = 0.45;     // top-width ≤ → diamond (corpus diamonds ≤ 0.30)
+const PIP_MID0 = 0.30, PIP_MID1 = 0.70; // mid band for the ♣/♠ run count
+const PIP_CLUB_MINRUNS = 3;       // ≥ → club (3 lobes); == 1 → spade; else abstain
+const PIP_MIN_INK = 15;           // fewer ink px than this → no pip → abstain
+
+// Connected-component-clean the pip ink in the lower strip band, returning the
+// bbox-cropped binary mask of just the pip: drop blobs touching the band's top
+// edge (the rank glyph's bottom bleeds in there) and blobs < 18% of the largest
+// survivor (anti-alias specks), then crop to the surviving ink's bounding box.
+function _pipMask(rgba, w, h, color) {
+  const y0 = Math.floor(PIP_Y0_FRAC * h), bw = w, bh = h - y0;
+  if (bh < 8 || bw < 4) return null;
+  const ink = new Uint8Array(bw * bh);
+  for (let yy = 0; yy < bh; yy++) {
+    for (let xx = 0; xx < bw; xx++) {
+      const i = ((y0 + yy) * w + xx) * 4;
+      const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      let on;
+      if (color === 'red') on = (r - (g + b) / 2 > 38) && (r > 110);
+      else { const lum = (r + g + b) / 3; on = lum < 140 && Math.abs(r - g) < 28 && Math.abs(g - b) < 32; }
+      if (on) ink[yy * bw + xx] = 1;
+    }
+  }
+  // 4-connected labelling (iterative flood fill)
+  const lab = new Int32Array(bw * bh);
+  const comps = []; // {size, touchesTop}
+  const stack = [];
+  for (let p = 0; p < bw * bh; p++) {
+    if (!ink[p] || lab[p]) continue;
+    const id = comps.length + 1;
+    let size = 0, touchesTop = false;
+    stack.push(p); lab[p] = id;
+    while (stack.length) {
+      const q = stack.pop(); size++;
+      const qy = (q / bw) | 0, qx = q - qy * bw;
+      if (qy === 0) touchesTop = true;
+      if (qx > 0 && ink[q - 1] && !lab[q - 1]) { lab[q - 1] = id; stack.push(q - 1); }
+      if (qx < bw - 1 && ink[q + 1] && !lab[q + 1]) { lab[q + 1] = id; stack.push(q + 1); }
+      if (qy > 0 && ink[q - bw] && !lab[q - bw]) { lab[q - bw] = id; stack.push(q - bw); }
+      if (qy < bh - 1 && ink[q + bw] && !lab[q + bw]) { lab[q + bw] = id; stack.push(q + bw); }
+    }
+    comps.push({ size, touchesTop });
+  }
+  let maxSurv = 0;
+  for (let c = 0; c < comps.length; c++) if (!comps[c].touchesTop && comps[c].size > maxSurv) maxSurv = comps[c].size;
+  if (maxSurv < PIP_MIN_INK) return null;
+  // keep mask, bbox
+  let x0 = bw, x1 = -1, y0b = bh, y1b = -1, count = 0;
+  const keep = new Uint8Array(bw * bh);
+  for (let yy = 0; yy < bh; yy++) for (let xx = 0; xx < bw; xx++) {
+    const id = lab[yy * bw + xx];
+    if (!id) continue;
+    const c = comps[id - 1];
+    if (c.touchesTop || c.size <= 0.18 * maxSurv) continue;
+    keep[yy * bw + xx] = 1; count++;
+    if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0b) y0b = yy; if (yy > y1b) y1b = yy;
+  }
+  if (count < PIP_MIN_INK || x1 < x0 || y1b < y0b) return null;
+  const mw = x1 - x0 + 1, mh = y1b - y0b + 1;
+  const mask = new Uint8Array(mw * mh);
+  for (let yy = 0; yy < mh; yy++) for (let xx = 0; xx < mw; xx++) mask[yy * mw + xx] = keep[(y0b + yy) * bw + (x0 + xx)];
+  return { mask, mw, mh };
+}
+
+// Classify a card's suit from its corner pip, constrained to the two suits of
+// the (already-reliable) ink color. Returns {suit, margin} or {suit:null} to
+// ABSTAIN. margin is the normalized distance past the decision band (a 2-way
+// "♥ or ♦" output, never a confident wrong suit).
+function readSuitFromPip(rgba, w, h, color) {
+  const pm = _pipMask(rgba, w, h, color);
+  if (!pm) return { suit: null, margin: 0 };
+  const { mask, mw, mh } = pm;
+  if (color === 'red') {
+    const tb = Math.max(1, Math.floor(PIP_TOPBAND * mh));
+    let cols = 0;
+    for (let xx = 0; xx < mw; xx++) {
+      let any = 0;
+      for (let yy = 0; yy < tb; yy++) if (mask[yy * mw + xx]) { any = 1; break; }
+      cols += any;
+    }
+    const topw = cols / mw;
+    if (topw >= PIP_HEART_MIN) return { suit: 'h', margin: topw - PIP_HEART_MIN };
+    if (topw <= PIP_DIAMOND_MAX) return { suit: 'd', margin: PIP_DIAMOND_MAX - topw };
+    return { suit: null, margin: 0 };
+  }
+  // black: max contiguous ink runs across the mid band (club lobes → 3, spade → 1)
+  const m0 = Math.floor(PIP_MID0 * mh), m1 = Math.max(m0 + 1, Math.floor(PIP_MID1 * mh));
+  let maxRuns = 0;
+  for (let yy = m0; yy < m1; yy++) {
+    let runs = 0, prev = 0;
+    for (let xx = 0; xx < mw; xx++) { const v = mask[yy * mw + xx]; if (v && !prev) runs++; prev = v; }
+    if (runs > maxRuns) maxRuns = runs;
+  }
+  if (maxRuns >= PIP_CLUB_MINRUNS) return { suit: 'c', margin: maxRuns - PIP_CLUB_MINRUNS };
+  if (maxRuns === 1) return { suit: 's', margin: 1 };
+  return { suit: null, margin: 0 };
+}
+
 // ─── multi-signature matcher ──────────────────────────────────────────────
 // Wraps CardTemplateMatcher's hash storage with three signatures. Match uses
 // a weighted Hamming distance: brightness 50%, color 30%, edge 20%. Catches
 // confusions that any single hash misses (e.g., A♥ vs A♦ — brightness hash
-// near-identical, color hash near-identical, but edge hash differs).
+// near-identical, color hash near-identical, but edge hash differs). The suit
+// is then refined by the dedicated pip classifier (Component 4), which abstains
+// rather than ever return a confident wrong same-color suit.
 class MultiSignatureMatcher {
   constructor(storageKey) {
     this.key = storageKey || 'multi-sig-templates';
@@ -373,7 +497,21 @@ class MultiSignatureMatcher {
       const combined = 0.5 * dB + 0.3 * dC + 0.2 * dE;
       if (combined < bestDist) { bestDist = combined; best = card; }
     }
-    return best ? { card: best, distance: bestDist, confidence: 1 - bestDist / TPL_BITS } : null;
+    if (!best) return null;
+    // Rank + red/black colour from the hash are reliable; the corner pip is what
+    // the card hash under-resolves, so refine the suit with Component 4. When it
+    // abstains we keep the hash's suit but flag it unconfident with the 2-way
+    // alternatives — never a silent confident guess on a same-colour pair.
+    const rank = best[0];
+    const color = (best[1] === 'h' || best[1] === 'd') ? 'red' : 'black';
+    const ps = readSuitFromPip(rgba, w, h, color);
+    let card = best, suitConfident = true, suitAlternatives = null;
+    if (ps && ps.suit) card = rank + ps.suit;
+    else { suitConfident = false; suitAlternatives = color === 'red' ? ['h', 'd'] : ['s', 'c']; }
+    return {
+      card, distance: bestDist, confidence: 1 - bestDist / TPL_BITS,
+      suit: card[1], suitConfident, suitAlternatives, suitMargin: ps ? ps.margin : 0,
+    };
   }
   clear() { this.templates.clear(); this._save(); }
   forget(card) { this.templates.delete(card); this._save(); }
@@ -871,6 +1009,8 @@ return {
   CardTemplateMatcher, hashCardRGBA, hashCardEdge, hashCardColor,
   hammingDistance, TPL_W, TPL_H, TPL_BITS,
   MultiSignatureMatcher,
+  // Suit-pip shape classifier (Component 4) — same-colour ♥/♦, ♠/♣ tiebreak
+  readSuitFromPip,
   // Digit/symbol matcher + its hashes + grid constants (Component 1)
   DigitMatcher, hashDigitRGBA, hashDigitEdge, hashDigitColor,
   DIGIT_W, DIGIT_H, DIGIT_BITS, DIGIT_CONF_THRESHOLD, DIGIT_SYMBOLS,
