@@ -153,6 +153,9 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const [cardReads, setCardReads] = React.useState({
     board: [null, null, null, null, null], hero: [null, null],
   });
+  // Hero-anchor diagnostics: did the band worker start, what did it OCR, did it match?
+  const [heroDbg, setHeroDbg] = React.useState({ ready: false, ocr: '', matched: null });
+  const heroDbgRef = React.useRef({ ready: false, ocr: '', matched: null });
   // Visible previews of the actual board/hero crops fed to the matcher (so a
   // misplaced region box is obvious — felt instead of cards).
   const boardCanvasRef = React.useRef(null);
@@ -204,11 +207,14 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         try { canvas = rgbaToCanvas(band.color.rgba, band.color.w, band.color.h); binarizeInvertCanvas(canvas, 128); }
         catch (_) { heroBusyRef.current = false; }
         if (canvas) {
-          hw.recognize(canvas, {}, { blocks: true })
+          hw.recognize(canvas, {}, { blocks: true, text: true })
             .then(({ data }) => {
               const det = PokerRegions.detectHero(flattenWords(data),
                 { bandOriginX, bandOriginY, bandScale: 1 });
               if (det) heroDetRef.current = { det, fresh: true };
+              // diagnostics: raw band OCR text + whether the hero plate matched
+              const dbg = { ready: true, ocr: ((data && data.text) || '').replace(/\s+/g, ' ').trim().slice(0, 60), matched: det ? det.text : null };
+              heroDbgRef.current = dbg; setHeroDbg(dbg);
             })
             .catch(() => { /* OCR hiccup — keep the last-good anchor */ })
             .finally(() => { heroBusyRef.current = false; });
@@ -260,6 +266,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           lastLogKeyRef.current = key;
           const log = cardLogRef.current;
           log.push({ t: Date.now(), anchor: anchorStatusRef.current, video: (vw && vh) ? [vw, vh] : null,
+            heroDetect: { ...heroDbgRef.current },
             board: boardReads.map((r, i) => cellRecImg(r, bCells && bCells[i])),
             hero: heroReads.map((r, i) => cellRecImg(r, hCells && hCells[i])) });
           if (log.length > 1000) log.shift(); // crop images are heavy — cap memory
@@ -310,7 +317,13 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         await w.setParameters({ tessedit_pageseg_mode: '6' });
         if (disposed) { try { await w.terminate(); } catch (_) {} return; }
         heroWorkerRef.current = w;
-      } catch (e) { console.warn('[hero-anchor] worker init failed:', e); }
+        const dbg = { ...heroDbgRef.current, ready: true };
+        heroDbgRef.current = dbg; setHeroDbg(dbg);
+      } catch (e) {
+        console.warn('[hero-anchor] worker init failed:', e);
+        const dbg = { ready: false, ocr: 'WORKER INIT FAILED: ' + (e && e.message || e), matched: null };
+        heroDbgRef.current = dbg; setHeroDbg(dbg);
+      }
     })();
     return () => {
       disposed = true;
@@ -380,6 +393,9 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         React.createElement('span', { style: S.mut }, `anchor: ${anchorStatus}`),
         React.createElement('span', { style: S.mut }, `video: ${videoSize ? videoSize.w + '×' + videoSize.h : '—'}`),
       ),
+      // hero-anchor detection diagnostics — why the anchor is/isn't engaging
+      React.createElement('div', { style: { ...S.mut, fontSize: 12, marginBottom: 6 } },
+        `hero-detect: worker ${heroDbg.ready ? 'ready' : 'NOT ready'} · ocr "${heroDbg.ocr || ''}" · match ${heroDbg.matched || '—'}`),
       // the advice — the whole point — rendered by the shared contract panel
       React.createElement('div', { style: S.advisorHost },
         React.createElement(AdvisorPanel, { event: view.advisorEvent, muted: false, onToggleMute: () => {} })),
