@@ -45,6 +45,9 @@ function readCardCell(matcher, cell) {
   // confident rank+colour; suit may still abstain (never a confident wrong suit)
   return { state: m.suitConfident ? 'read' : 'abstain', conf: m.confidence, code: m.card, alts: m.suitAlternatives };
 }
+// change-detect key (ignores confidence jitter) + compact record for the log
+const cellRecKey = (r) => (r ? r.state + (r.code || '') : 'none');
+const cellRec = (r) => (r ? { state: r.state, code: r.code || null, conf: r.conf != null ? +r.conf.toFixed(3) : null } : { state: 'none' });
 // One card chip element for the live readout (read-only).
 function cardChip(r, key) {
   r = r || { state: 'none' };
@@ -109,6 +112,11 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   // misplaced region box is obvious — felt instead of cards).
   const boardCanvasRef = React.useRef(null);
   const heroCanvasRef = React.useRef(null);
+  // Rolling record of card reads (appended only when the read CHANGES, not every
+  // frame), downloadable as JSON for inspection.
+  const cardLogRef = React.useRef([]);
+  const lastLogKeyRef = React.useRef('');
+  const [recordCount, setRecordCount] = React.useState(0);
 
   // Build the pipeline once.
   if (!convRef.current) {
@@ -194,13 +202,22 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         const bc = getCrops('board'), hc = getCrops('hero_hole');
         const bCells = bc && bc.color ? PF.sliceCells(bc.color, 5, { layout: 'board' }) : null;
         const hCells = hc && hc.color ? PF.sliceCells(hc.color, 2, { layout: 'hero' }) : null;
-        setCardReads({
-          board: Array.from({ length: 5 }, (_, i) => bCells && bCells[i] ? readCardCell(cm, bCells[i]) : { state: 'none' }),
-          hero: Array.from({ length: 2 }, (_, i) => hCells && hCells[i] ? readCardCell(cm, hCells[i]) : { state: 'none' }),
-        });
+        const boardReads = Array.from({ length: 5 }, (_, i) => bCells && bCells[i] ? readCardCell(cm, bCells[i]) : { state: 'none' });
+        const heroReads = Array.from({ length: 2 }, (_, i) => hCells && hCells[i] ? readCardCell(cm, hCells[i]) : { state: 'none' });
+        setCardReads({ board: boardReads, hero: heroReads });
         // mirror the exact crops the matcher saw (reveals box misplacement)
         drawCrop(boardCanvasRef.current, bc && bc.color, 360);
         drawCrop(heroCanvasRef.current, hc && hc.color, 150);
+        // record on CHANGE (not every frame): a clean timeline of what matched
+        const key = boardReads.map(cellRecKey).join(',') + '|' + heroReads.map(cellRecKey).join(',') + '|' + anchorStatusRef.current;
+        if (key !== lastLogKeyRef.current) {
+          lastLogKeyRef.current = key;
+          const log = cardLogRef.current;
+          log.push({ t: Date.now(), anchor: anchorStatusRef.current, video: (vw && vh) ? [vw, vh] : null,
+            board: boardReads.map(cellRec), hero: heroReads.map(cellRec) });
+          if (log.length > 5000) log.shift();
+          setRecordCount(log.length);
+        }
       }
     } catch (e) { /* a debug panel must never break capture */ }
     // urgency proxy: count frames since hero's turn opened (resets between turns)
@@ -262,6 +279,21 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
 
   React.useEffect(() => () => { try { convRef.current && convRef.current.botLink.close(); } catch (e) {} }, []);
 
+  // Download / clear the card-read record.
+  const downloadReads = React.useCallback(() => {
+    try {
+      const blob = new Blob([JSON.stringify(cardLogRef.current, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'card-reads-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 0);
+    } catch (e) { console.warn('[card-reads] download failed:', e); }
+  }, []);
+  const clearReads = React.useCallback(() => {
+    cardLogRef.current = []; lastLogKeyRef.current = ''; setRecordCount(0);
+  }, []);
+
   // ── display (inline styles — self-contained, no build wiring) ──────────────
   // The advice/escalate readout is now the shared <AdvisorPanel> (the contract
   // display, items 1–9), fed by the live converter→AdvisorEvent adapter above.
@@ -292,7 +324,11 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         React.createElement(AdvisorPanel, { event: view.advisorEvent, muted: false, onToggleMute: () => {} })),
       // live card-readout (read-only): what the card pipeline matches each frame
       React.createElement('div', { style: S.cards },
-        React.createElement('div', { style: { color: '#aaa', fontSize: 12 } }, 'card readout (live)'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, color: '#aaa', fontSize: 12 } },
+          React.createElement('span', null, 'card readout (live)'),
+          React.createElement('span', { style: { color: '#666' } }, `rec: ${recordCount}`),
+          React.createElement('button', { onClick: downloadReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Download JSON'),
+          React.createElement('button', { onClick: clearReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Clear')),
         React.createElement('div', { style: S.cardsRow },
           React.createElement('span', { style: S.cardsLabel }, 'board'),
           ...cardReads.board.map((r, i) => cardChip(r, 'b' + i))),
