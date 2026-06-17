@@ -23,6 +23,29 @@ function rgbaToCanvas(rgba, w, h) {
   c.getContext('2d', { willReadFrequently: true }).putImageData(new ImageData(data, w, h), 0, 0);
   return c;
 }
+// Binarize + invert in place (bright→black, dark→white) — same transform the main
+// OCR loop uses, so white-on-dark plate text becomes dark-on-light for Tesseract.
+function binarizeInvertCanvas(canvas, threshold) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = Math.max(d[i], d[i + 1], d[i + 2]) > threshold ? 0 : 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+// Tesseract.js v5 returns no top-level data.words — words are nested in the block
+// tree (blocks→paragraphs→lines→words). Flatten them (falling back to data.words
+// for older builds) so detectHero gets the {text,bbox} list it expects.
+function flattenWords(data) {
+  if (data && Array.isArray(data.words) && data.words.length) return data.words;
+  const out = [];
+  if (data && Array.isArray(data.blocks)) {
+    for (const b of data.blocks) for (const p of (b.paragraphs || [])) for (const l of (p.lines || [])) for (const w of (l.words || [])) out.push(w);
+  }
+  return out;
+}
 
 // ── Live card-readout (read-only debug panel) ───────────────────────────────
 // Classifies one card-strip cell exactly as the pipeline does: same strip crop
@@ -178,12 +201,12 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         const bandOriginX = Math.floor(vw * heroBandRegion.x);
         const bandOriginY = Math.floor(vh * heroBandRegion.y);
         let canvas = null;
-        try { canvas = rgbaToCanvas(band.color.rgba, band.color.w, band.color.h); }
+        try { canvas = rgbaToCanvas(band.color.rgba, band.color.w, band.color.h); binarizeInvertCanvas(canvas, 128); }
         catch (_) { heroBusyRef.current = false; }
         if (canvas) {
           hw.recognize(canvas, {}, { blocks: true })
             .then(({ data }) => {
-              const det = PokerRegions.detectHero((data && data.words) || [],
+              const det = PokerRegions.detectHero(flattenWords(data),
                 { bandOriginX, bandOriginY, bandScale: 1 });
               if (det) heroDetRef.current = { det, fresh: true };
             })
