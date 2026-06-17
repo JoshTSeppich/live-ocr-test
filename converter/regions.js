@@ -33,20 +33,28 @@
 
   // §0.4 — stack readout plates (white "N.NN BB" on dark).
   const STACK_BOXES = {
-    TL: box(560, 600, 490, 190), TC: box(1280, 355, 560, 175), TR: box(2290, 600, 490, 190),
-    BL: box(490, 1095, 490, 175), BC: box(1380, 1450, 360, 75), BR: box(2250, 1095, 490, 175),
+    TL: { x: 649, y: 569, w: 287, h: 81 },
+    TC: { x: 1384, y: 327, w: 287, h: 81 },
+    TR: { x: 2125, y: 561, w: 287, h: 81 },
+    BL: { x: 640, y: 1166, w: 287, h: 81 },
+    BC: { x: 1384, y: 1476, w: 287, h: 81 },
+    BR: { x: 2153, y: 1130, w: 287, h: 81 },
   };
 
   // §0.5 — bet-chip badges. Left edges already pushed right to clear the
   // printed chip-denomination icon; the BC left edge especially. If a residual
   // icon sliver appears on a live feed, nudge that seat's x right and RE-MEASURE.
   const BET_BOXES = {
-    TL: box(862, 608, 245, 70), TC: box(1430, 585, 240, 70), TR: box(2000, 590, 240, 70),
-    BL: box(858, 1110, 250, 70), BC: box(1485, 1148, 215, 65), BR: box(1862, 1110, 250, 70),
+    TL: { x: 827, y: 728, w: 230, h: 74 },
+    TC: { x: 1436, y: 496, w: 253, h: 74 },
+    TR: { x: 1792, y: 566, w: 230, h: 74 },
+    BL: { x: 873, y: 1116, w: 230, h: 74 },
+    BC: { x: 1424, y: 1178, w: 230, h: 74 },
+    BR: { x: 1792, y: 1093, w: 230, h: 74 },
   };
 
   // §0.6 — pot readout ("Pot: N.NN BB").
-  const POT_BOX = box(1280, 628, 370, 62);
+  const POT_BOX = box(1361, 542, 322, 81);
 
   // Card regions. §0 referenced the card pipeline (MultiSignatureMatcher) but
   // never captured the rects — these were MEASURED the same way as the stack/bet
@@ -56,9 +64,30 @@
   // confidence 1.0, and empty flop cells fall to ~0.75 (< the 0.85 threshold),
   // so board card COUNT drives street correctly. Slice each into N even cells
   // (engine cardCellsFromRegion style: width / N).
-  const BOARD_BOX = box(1053, 789, 835, 230);   // 5 cells of 167 px
+  //
+  // ⚠️ KNOWN-BAD CARD GEOMETRY — these two BOXES are a working-tree REGRESSION.
+  //   The comment above (x 1053→1721, pitch 167, "5 cells of 167 px") and the
+  //   capture corpus DISAGREE with the literals below:
+  //     • corpus board_cards.json (2940×1846): 5 cards, bbox_x 1023→1887,
+  //       pitch 166–167, body-left = bbox_x+30 ⇒ first card body 1053, span ≈835,
+  //       y≈765, h≈132. The committed value box(1053,789,835,230) matches that;
+  //       this working-tree box(1160,728,620,201) does NOT — 620/5 = 124 ≠ 167,
+  //       so 5 cards at pitch 167 cannot fit (the literal contradicts its own
+  //       "5 cells of 167 px" comment).
+  //     • corpus hero_hands.json: hole cards OVERLAP — rear occluded to a 55px
+  //       sliver at bbox_x≈1360, front≈1415 w165, y≈1235, h≈143; span ≈222.
+  //       The committed value box(1359,1238,222,158) matches; this working-tree
+  //       box(1298,1348,230,201) does NOT.
+  //   NOT fixed here: per the live-wiring plan the card-strip slicer is DEFERRED
+  //   and these boxes must be RE-MEASURED against a fresh 2940×1846 frame before
+  //   the slicer is built (reconcile to the corpus numbers above). Until then no
+  //   card slicer consumes them, so the bad values affect nothing live. Do NOT
+  //   build the per-card strip crop against these literals. (Also note: this
+  //   whole file — the hero-anchor math included — is currently uncommitted
+  //   working-tree work; HEAD has neither the anchor code nor these box edits.)
+  const BOARD_BOX = box(1160, 728, 620, 201);   // ⚠ REGRESSION — see note; corpus = box(1053,789,835,230)
   const BOARD_CELLS = 5;
-  const HERO_HOLE_BOX = box(1359, 1238, 222, 158); // 2 cells of 111 px
+  const HERO_HOLE_BOX = box(1298, 1348, 230, 201); // ⚠ REGRESSION — see note; corpus = box(1359,1238,222,158)
   const HERO_HOLE_CELLS = 2;
 
   // §0.8 — button-puck slot anchors (puck CENTERS, not boxes). The puck is
@@ -71,12 +100,12 @@
   // A single rectangle enclosing all six slots (+margin) — the crop the puck
   // blob scan runs over, so the search is local, not whole-frame. Centroids
   // found here are crop-local; add {x,y} back to map into frame coords.
-  const BUTTON_SCAN_RECT = box(680, 520, 1580, 800); // 680..2260 × 520..1320
+  const BUTTON_SCAN_RECT = box(792, 387, 1355, 1209); // 680..2260 × 520..1320
 
   // §0.9 — hero action-timer: a green depleting horizontal bar. NO numeric
   // clock exists. "Time left" = green fill-fraction across this rect.
   // x 1255..1675 (full ≈ 420 px), y 1519..1532.
-  const TIMER_RECT = box(1255, 1519, 420, 13);
+  const TIMER_RECT = box(523, 1271, 368, 22);
 
   // Turn indicator: the hero action-button panel (Fold/Check/Call/Bet/Raise) at
   // the bottom. P4 (PROBE_FINDINGS_20260610) MEASURED this box — the prior
@@ -84,25 +113,178 @@
   // left and is ~2× wider). action_reader.py's (1700,1685,1240,161) nearly matches
   // and cross-checks. Turn authority is the FULL action set parsed from this panel
   // (observation.classifyActionSet), NOT "any red" — see observation.turnIndicator.
-  const ACTION_PANEL_RECT = box(1744, 1690, 1178, 144); // P4-measured
+  const ACTION_PANEL_RECT = box(1929, 1705, 1011, 139); // P4-measured
+
+  // Single source of truth for the region set. Both the static (cold-start)
+  // captureRegions() and the hero-anchored computeAnchoredRegions() iterate
+  // this list, so they can never drift in membership/order, and all geometry
+  // stays in the box literals above. ORDER MATTERS (stack/bet interleaved per
+  // seat, then pot/board/hole/button/timer/panel) — downstream consumers and
+  // the prior captureRegions() output depend on it.
+  const REGION_DEFS = [];
+  for (const s of SEATS) {
+    REGION_DEFS.push({ id: `stack_${s}`, name: `stack_${s}`, seat: s, kind: 'stack', box: STACK_BOXES[s] });
+    REGION_DEFS.push({ id: `bet_${s}`, name: `bet_${s}`, seat: s, kind: 'bet', box: BET_BOXES[s] });
+  }
+  REGION_DEFS.push({ id: 'pot', name: 'pot', kind: 'pot', box: POT_BOX });
+  REGION_DEFS.push({ id: 'board', name: 'board', kind: 'cards', cells: BOARD_CELLS, box: BOARD_BOX });
+  REGION_DEFS.push({ id: 'hero_hole', name: 'hero_hole', kind: 'cards', cells: HERO_HOLE_CELLS, box: HERO_HOLE_BOX });
+  REGION_DEFS.push({ id: 'button_scan', name: 'button_scan', kind: 'button', box: BUTTON_SCAN_RECT });
+  REGION_DEFS.push({ id: 'timer', name: 'timer', kind: 'timer', box: TIMER_RECT });
+  REGION_DEFS.push({ id: 'action_panel', name: 'action_panel', kind: 'turn', box: ACTION_PANEL_RECT });
+
+  // Build a descriptor in the exact shape the pipeline consumes
+  // ({id, name, seat?, kind, cells?, x, y, w, h}), attaching seat/cells only
+  // when the def carries them (preserves the historical object shape/order).
+  function describe(def, frc) {
+    const d = { id: def.id, name: def.name };
+    if (def.seat != null) d.seat = def.seat;
+    d.kind = def.kind;
+    if (def.cells != null) d.cells = def.cells;
+    return Object.assign(d, frc);
+  }
 
   // Region descriptors for the useLiveOCR capture hook. `name` matters: the
   // existing fast-path router (live-ocr-test.jsx recognizeFast) routes by name
   // matching /pot|stack|bet|to_?call/, and SKIP_ELIGIBLE hash-skips numeric
   // regions. So stack/bet/pot names below light up the DigitMatcher fast path.
+  //
+  // This is the STATIC, fraction-of-REF_FRAME placement — correct only when the
+  // live capture matches REF_FRAME's geometry. It is the cold-start guess; for
+  // resolution-independent placement use computeAnchoredRegions() (below), which
+  // re-derives geometry from the detected hero plate each frame.
   function captureRegions() {
-    const out = [];
-    for (const s of SEATS) {
-      out.push({ id: `stack_${s}`, name: `stack_${s}`, seat: s, kind: 'stack', ...frac(STACK_BOXES[s]) });
-      out.push({ id: `bet_${s}`, name: `bet_${s}`, seat: s, kind: 'bet', ...frac(BET_BOXES[s]) });
+    return REGION_DEFS.map((def) => describe(def, frac(def.box)));
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // HERO-ANCHORED GEOMETRY — resolution-independent region placement.
+  //
+  // The BetOnline capture resolution VARIES between and within sessions
+  // (observed 2940×1558, 2932×1364, 2932×1054, 2696×1912 …). Fraction-of-frame
+  // regions fail because the aspect ratio changes with height. A three-height
+  // probe established that THE TABLE SCALES PROPORTIONALLY, and that the hero
+  // nameplate ("RoloDango", bottom-center, seat BC) has invariant fractional
+  // geometry. So hero's measured position + text-height fully determine the
+  // table's origin and scale on any frame: anchor every region to hero.
+  //
+  // The box literals above are authored in px on a 2940×1846 frame (REF_FRAME).
+  // Each region is stored as an OFFSET (in REF_FRAME px) of its center from the
+  // hero name-text center (REF_HERO), then re-placed each frame from the live
+  // hero detection.
+
+  const REF_FRAME = { w: FRAME_W, h: FRAME_H }; // 2940×1846 — frame the box literals are authored in
+
+  // MEASURED INVARIANTS (constant across capture heights). The text-height
+  // fraction is the SCALE GAUGE — geometry is keyed off this fraction, never a
+  // raw pixel height, so scale holds across resolutions.
+  const HERO_TEXTH_FRAC = 0.0276; // hero name-text height / frame height  (SCALE GAUGE)
+  const HERO_CY_FRAC    = 0.740;  // hero name-text vertical center / frame height
+  const HERO_CX_FRAC    = 0.521;  // hero name-text horizontal center / frame width
+                                  // (drifts slightly with aspect → at runtime anchor x to the
+                                  //  DETECTED hero cx, never to this constant)
+
+  // REF_HERO expressed in REF_FRAME (1846) px. cx uses frame width (unchanged
+  // at 2940 across the probe heights); cy/textH are DERIVED from the invariant
+  // fractions so the 0.0276 gauge remains the single source of truth and textH
+  // is never a magic pixel constant. (= {cx:1532, cy:1366, textH:50.95}.)
+  const REF_HERO = {
+    cx: Math.round(HERO_CX_FRAC * REF_FRAME.w),
+    cy: Math.round(HERO_CY_FRAC * REF_FRAME.h),
+    textH: HERO_TEXTH_FRAC * REF_FRAME.h,
+  };
+
+  // Coarse search band (fractions of the frame) where the hero plate lives —
+  // lower-center. The loop-owner OCRs THIS band and feeds matched words to
+  // detectHero(); regions.js does not capture pixels itself.
+  const HERO_SEARCH_BAND = { x: 0.30, y: 0.62, w: 0.40, h: 0.34 }; // x 0.30–0.70, y 0.62–0.96
+
+  // Offset of a box's CENTER from REF_HERO, in REF_FRAME px.
+  function offsetOf(b) {
+    return { dx: (b.x + b.w / 2) - REF_HERO.cx, dy: (b.y + b.h / 2) - REF_HERO.cy, w: b.w, h: b.h };
+  }
+
+  // Last successful transform, reused on detection misses (~30% of frames the
+  // hero plate is occluded by the action overlay or mid-animation).
+  let _lastAnchor = null; // {originX, originY, scale, k, frameH}
+  function resetAnchorCache() { _lastAnchor = null; }
+
+  // detectHero — turn OCR words from the search band into hero {cx, cy, textH}
+  // in FULL-FRAME px. Matches /rol/i (OCR may return "RoloDango", "RoloDan",
+  // "Redan" …) and takes the LONGEST hit. `words` are Tesseract-style
+  // [{text, bbox:{x0,y0,x1,y1}}] in band-local px; the loop-owner passes the
+  // band's frame-px origin and the OCR downscale factor (bandScale: local px ÷
+  // bandScale = frame px) so local coords map back to full-frame. Returns null
+  // on no match — never throws.
+  function detectHero(words, opts) {
+    opts = opts || {};
+    const ox = opts.bandOriginX || 0;
+    const oy = opts.bandOriginY || 0;
+    const sc = opts.bandScale || 1;
+    let best = null;
+    for (const w of (words || [])) {
+      const t = ((w && w.text) || '').trim();
+      if (!/rol/i.test(t)) continue;
+      const bb = (w && w.bbox) || {};
+      const lw = bb.x1 - bb.x0;
+      const lh = bb.y1 - bb.y0;
+      if (!(lw > 0) || !(lh > 0)) continue;
+      if (!best || t.length > best.len) {
+        best = {
+          len: t.length, text: t,
+          cx: ox + ((bb.x0 + bb.x1) / 2) / sc,
+          cy: oy + ((bb.y0 + bb.y1) / 2) / sc,
+          textH: lh / sc,
+        };
+      }
     }
-    out.push({ id: 'pot', name: 'pot', kind: 'pot', ...frac(POT_BOX) });
-    out.push({ id: 'board', name: 'board', kind: 'cards', cells: BOARD_CELLS, ...frac(BOARD_BOX) });
-    out.push({ id: 'hero_hole', name: 'hero_hole', kind: 'cards', cells: HERO_HOLE_CELLS, ...frac(HERO_HOLE_BOX) });
-    out.push({ id: 'button_scan', name: 'button_scan', kind: 'button', ...frac(BUTTON_SCAN_RECT) });
-    out.push({ id: 'timer', name: 'timer', kind: 'timer', ...frac(TIMER_RECT) });
-    out.push({ id: 'action_panel', name: 'action_panel', kind: 'turn', ...frac(ACTION_PANEL_RECT) });
-    return out;
+    return best ? { cx: best.cx, cy: best.cy, textH: best.textH, text: best.text } : null;
+  }
+
+  // Place one REF_FRAME-px box via a hero transform, return {x,y,w,h} as
+  // fractions of the current frame.
+  function placeFrac(b, anchor, vw, vh) {
+    const off = offsetOf(b);
+    const liveCx = anchor.originX + off.dx * anchor.k;
+    const liveCy = anchor.originY + off.dy * anchor.k;
+    const liveW = off.w * anchor.k;
+    const liveH = off.h * anchor.k;
+    return { x: (liveCx - liveW / 2) / vw, y: (liveCy - liveH / 2) / vh, w: liveW / vw, h: liveH / vh };
+  }
+
+  // computeAnchoredRegions — the resolution-independent placement the loop-owner
+  // calls per frame. PURE w.r.t. its inputs (aside from the last-good cache).
+  //   heroDetection : {cx, cy, textH} in full-frame px (from detectHero), or null
+  //   frameW,frameH : current capture dimensions in px
+  // Returns { regions:[…same descriptor shape as captureRegions()…], status,
+  //           anchor:{originX,originY,scale}|null }. Three states:
+  //   'anchor-live'   — hero found this frame
+  //   'anchor-cached' — miss; reusing the last good transform
+  //   'anchor-cold'   — no detection ever; REF fractions (== captureRegions())
+  function computeAnchoredRegions(heroDetection, frameW, frameH) {
+    const vw = frameW || REF_FRAME.w;
+    const vh = frameH || REF_FRAME.h;
+    let anchor, status;
+    if (heroDetection && heroDetection.textH > 0) {
+      // Scale off the INVARIANT fraction gauge (robust across resolutions):
+      //   scale = (detected_textH / current_frame_h) / HERO_TEXTH_FRAC
+      // Offsets are REF_FRAME(1846)-px, so rescale to live-px with
+      //   k = scale · current_frame_h / REF_FRAME.h
+      // which reduces exactly to detected_textH / REF_HERO.textH (frame_h
+      // cancels) — kept in the gauge form so 0.0276 stays the source of truth.
+      const scale = (heroDetection.textH / vh) / HERO_TEXTH_FRAC;
+      const k = scale * vh / REF_FRAME.h;
+      anchor = { originX: heroDetection.cx, originY: heroDetection.cy, scale, k, frameH: vh };
+      _lastAnchor = anchor;
+      status = 'anchor-live';
+    } else if (_lastAnchor) {
+      anchor = _lastAnchor;
+      status = 'anchor-cached';
+    } else {
+      return { regions: captureRegions(), status: 'anchor-cold', anchor: null };
+    }
+    const regions = REGION_DEFS.map((def) => describe(def, placeFrac(def.box, anchor, vw, vh)));
+    return { regions, status, anchor: { originX: anchor.originX, originY: anchor.originY, scale: anchor.scale } };
   }
 
   return {
@@ -111,5 +293,9 @@
     TIMER_RECT, ACTION_PANEL_RECT,
     BOARD_BOX, BOARD_CELLS, HERO_HOLE_BOX, HERO_HOLE_CELLS,
     frac, box, captureRegions,
+    // hero-anchored geometry:
+    REF_FRAME, REF_HERO, HERO_TEXTH_FRAC, HERO_CY_FRAC, HERO_CX_FRAC,
+    HERO_SEARCH_BAND, REGION_DEFS, offsetOf, detectHero,
+    computeAnchoredRegions, resetAnchorCache,
   };
 });

@@ -524,6 +524,15 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
         for (const { region, pair, srcCtx, scale } of prepared) {
           if (cancelRef.current) break;
 
+          // ── Anchor-only regions ──────────────────────────────────────────
+          // Some regions exist solely so a consumer can read their COLOUR crop
+          // via getCrops()/onFrame — e.g. the hero-nameplate search band, which
+          // a dedicated worker OCRs for word boxes (hero-anchored geometry).
+          // They carry no in-grammar text, so skip the (expensive) recognizer
+          // for them; PHASE 1 already built their source crop. Mirrors the
+          // hash-skip `continue` below — loop structure otherwise unchanged.
+          if (region.kind === 'anchor' || region.ocr === false) continue;
+
           // ── ROI hash-skip (Component 2) ──────────────────────────────────
           // For skip-eligible (numeric/turn) regions, dHash the binarized ocr
           // canvas. If it's byte-identical to the last SUCCESSFULLY recognized

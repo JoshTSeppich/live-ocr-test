@@ -25,9 +25,41 @@ import * as ReactDOMClient from 'react-dom/client';
 import * as Tesseract from 'tesseract.js';
 import PokerEngine from '../engine.js';
 import CaptureQueue from '../capture-queue.js';
+import stripTemplates from '../multi-sig-templates.strip.json';
 
 window.React = React;
 window.ReactDOM = ReactDOMClient; // exposes createRoot (the only API the app uses)
 window.Tesseract = Tesseract;
 window.PokerEngine = PokerEngine;
 window.CaptureQueue = CaptureQueue;
+
+// ── Seed the calibrated corner-strip card templates ───────────────────────
+// MultiSignatureMatcher.match() loads its templates from localStorage
+// 'multi-sig-templates' at construction. The suit-pip classifier (engine.js
+// Component 4) and the rank/colour hashes are CALIBRATED to the 55×130 corner
+// strip (docs/PIP_CROP_GEOMETRY.md). Any historically-taught FULL-CELL
+// templates under that key would feed match() the wrong crop, so the live
+// matcher must use the committed strip set (multi-sig-templates.strip.json,
+// validated 698/698 by tools/validate-suit-corpus.mjs).
+//
+// Seeded here, before live-ocr-test.jsx / driver.jsx construct their matchers.
+// Idempotent: a version marker means we replace stale full-cell templates ONCE
+// (the first load after this ships) and then leave localStorage alone, so a
+// later re-teach is not clobbered on every reload. Bump SEED_VERSION to force
+// a re-seed if the strip set itself changes.
+//
+// NOTE: this seeds the READING templates only. The live card-READ crop path
+// (cardCellsFromRegion / sliceCells) still slices full-height cells and does
+// NOT yet produce the calibrated 55×130 strip — that slicer is the deferred
+// follow-up. Until it lands, these strip templates are correct but the live
+// crop fed to them is not; the corpus harness is the meaningful gate.
+try {
+  const KEY = 'multi-sig-templates';
+  const MARK = 'multi-sig-templates:seed-version';
+  const SEED_VERSION = 'strip-v1';
+  if (typeof localStorage !== 'undefined'
+      && localStorage.getItem(MARK) !== SEED_VERSION) {
+    localStorage.setItem(KEY, JSON.stringify(stripTemplates));
+    localStorage.setItem(MARK, SEED_VERSION);
+  }
+} catch (_) { /* private mode / quota — matcher falls back to whatever's there */ }

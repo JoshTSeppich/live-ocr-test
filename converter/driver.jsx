@@ -14,12 +14,40 @@
           PokerHistory, PokerEscalate, PokerBotLink, PokerConverter, useLiveOCR,
           AdvisorEvent, AdvisorPanel */
 
+// Convert an {rgba,w,h} crop into an OffscreenCanvas a Tesseract worker can
+// recognize. Used to hand the hero-nameplate band crop to the dedicated
+// hero-anchor worker (which needs word bboxes, not the main loop's text path).
+function rgbaToCanvas(rgba, w, h) {
+  const data = rgba instanceof Uint8ClampedArray ? rgba : new Uint8ClampedArray(rgba);
+  const c = new OffscreenCanvas(w, h);
+  c.getContext('2d', { willReadFrequently: true }).putImageData(new ImageData(data, w, h), 0, 0);
+  return c;
+}
+
 function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const [view, setView] = React.useState({ state: 'idle', advisorEvent: null, seatWarning: null, betWarning: null, callWarning: null });
   const [linkStatus, setLinkStatus] = React.useState('idle');
   const convRef = React.useRef(null);
   const regionTextRef = React.useRef({}); // latest per-region OCR text (for check-vs-call)
   const pollRef = React.useRef(0);        // urgency proxy: frames since hero's turn began
+
+  // ── Hero-anchored, resolution-independent regions (ADR_hero_anchor_regions) ─
+  // Capture resolution varies between/within sessions, so fraction-of-frame
+  // placement drifts. A dedicated 2nd Tesseract worker reads the hero nameplate
+  // band each frame; detectHero + computeAnchoredRegions re-place EVERY region
+  // from the live hero plate, with a last-good fallback for the ~30% of frames
+  // the plate is occluded. The useLiveOCR loop is UNTOUCHED — it just consumes
+  // whatever `regions` we hand it (which we update per frame from onFrame).
+  const heroBandRegion = React.useMemo(() => ({
+    id: 'hero_band', name: 'hero_band', kind: 'anchor', ...PokerRegions.HERO_SEARCH_BAND,
+  }), []);
+  const [regions, setRegions] = React.useState(
+    () => PokerRegions.captureRegions().concat(heroBandRegion));
+  const [anchorStatus, setAnchorStatus] = React.useState('anchor-cold');
+  const anchorStatusRef = React.useRef('anchor-cold');
+  const heroWorkerRef = React.useRef(null); // dedicated band OCR worker (word bboxes)
+  const heroBusyRef = React.useRef(false);  // at most one band OCR in flight
+  const heroDetRef = React.useRef(null);    // { det, fresh } — latest hero detection
 
   // Build the pipeline once.
   if (!convRef.current) {
@@ -44,6 +72,53 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   // Feed every captured frame into the converter, then publish its view.
   const onFrame = React.useCallback((getCrops, dims) => {
     const { conv } = convRef.current;
+    const vw = dims && dims.videoW, vh = dims && dims.videoH;
+
+    // ── Hero-anchor: kick an async band OCR when the dedicated worker is free.
+    // The band crop is full-resolution (useLiveOCR's source crop is NOT
+    // downsampled), so band-local px map to frame px at scale 1, offset by the
+    // band's frame-px origin. The OCR is async + throttled (one in flight), so
+    // it never blocks the capture loop; its result updates the anchor.
+    const hw = heroWorkerRef.current;
+    if (hw && !heroBusyRef.current && vw && vh) {
+      const band = getCrops('hero_band');
+      if (band && band.color) {
+        heroBusyRef.current = true;
+        const bandOriginX = Math.floor(vw * heroBandRegion.x);
+        const bandOriginY = Math.floor(vh * heroBandRegion.y);
+        let canvas = null;
+        try { canvas = rgbaToCanvas(band.color.rgba, band.color.w, band.color.h); }
+        catch (_) { heroBusyRef.current = false; }
+        if (canvas) {
+          hw.recognize(canvas, {}, { blocks: true })
+            .then(({ data }) => {
+              const det = PokerRegions.detectHero((data && data.words) || [],
+                { bandOriginX, bandOriginY, bandScale: 1 });
+              if (det) heroDetRef.current = { det, fresh: true };
+            })
+            .catch(() => { /* OCR hiccup — keep the last-good anchor */ })
+            .finally(() => { heroBusyRef.current = false; });
+        }
+      }
+    }
+
+    // ── Re-place every region from the latest detection. A FRESH detection this
+    // frame → 'anchor-live'; otherwise pass null so computeAnchoredRegions
+    // reuses its last-good transform ('anchor-cached'), or the static REF
+    // placement before any detection lands ('anchor-cold'). hero_band is
+    // re-appended so we keep getting its crop next frame.
+    if (vw && vh) {
+      const pending = heroDetRef.current;
+      const det = pending && pending.fresh ? pending.det : null;
+      if (pending) pending.fresh = false;
+      const placed = PokerRegions.computeAnchoredRegions(det, vw, vh);
+      setRegions(placed.regions.concat(heroBandRegion));
+      if (placed.status !== anchorStatusRef.current) {
+        anchorStatusRef.current = placed.status;
+        setAnchorStatus(placed.status);
+      }
+    }
+
     // feed the latest action-panel OCR text (from Tesseract path) for check-vs-call
     conv.setPanelText(regionTextRef.current && regionTextRef.current.action_panel || null);
     const res = conv.onFrame(getCrops, dims); // res.request = the assembled snapshot
@@ -64,16 +139,45 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       if (advisorEvent) AdvisorEvent.sharedBus().publish(advisorEvent);
     } catch (e) { advisorEvent = null; } // never let a display map crash capture
     setView({ state: conv.view.state, advisorEvent, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning });
-  }, []);
+  }, [heroBandRegion]);
 
   const { status, start, stop, regionText } = useLiveOCR({
     intervalMs: 250,
-    regions: PokerRegions.captureRegions(),
+    regions,                          // hero-anchored; updated each frame by onFrame
     preprocess: true,
     binarizeThreshold: 128,
     onFrame,
   });
   regionTextRef.current = regionText; // keep the ref fresh for onFrame's closure
+
+  // Dedicated hero-band OCR worker: lives only while capturing. On stop/unmount
+  // it terminates and the anchor cache resets, so the next share re-detects from
+  // a clean cold start instead of inheriting a stale transform.
+  React.useEffect(() => {
+    if (status !== 'running') return undefined;
+    let disposed = false;
+    (async () => {
+      try {
+        const w = await window.Tesseract.createWorker('eng', 1, {
+          langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
+        });
+        await w.setParameters({ tessedit_pageseg_mode: '6' });
+        if (disposed) { try { await w.terminate(); } catch (_) {} return; }
+        heroWorkerRef.current = w;
+      } catch (e) { console.warn('[hero-anchor] worker init failed:', e); }
+    })();
+    return () => {
+      disposed = true;
+      const w = heroWorkerRef.current; heroWorkerRef.current = null;
+      if (w) { try { w.terminate(); } catch (_) {} }
+      heroBusyRef.current = false;
+      heroDetRef.current = null;
+      anchorStatusRef.current = 'anchor-cold';
+      try { PokerRegions.resetAnchorCache(); } catch (_) {}
+      setAnchorStatus('anchor-cold');
+      setRegions(PokerRegions.captureRegions().concat(heroBandRegion));
+    };
+  }, [status, heroBandRegion]);
 
   React.useEffect(() => () => { try { convRef.current && convRef.current.botLink.close(); } catch (e) {} }, []);
 
@@ -96,6 +200,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           status === 'running' ? 'Stop' : 'Start'),
         React.createElement('span', { style: S.mut }, `brain: ${linkStatus}`),
         React.createElement('span', { style: S.mut }, `state: ${view.state}`),
+        React.createElement('span', { style: S.mut }, `anchor: ${anchorStatus}`),
       ),
       // the advice — the whole point — rendered by the shared contract panel
       React.createElement('div', { style: S.advisorHost },
