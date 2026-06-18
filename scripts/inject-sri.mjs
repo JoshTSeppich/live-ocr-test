@@ -14,20 +14,26 @@ import { dirname, resolve } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const HTML = resolve(root, 'Live OCR Test.html'); // filename keeps its space (see commit msg)
 
-function sri(relPath) {
+// Return both the SRI (base64 sha384) and a short hex cache-bust token, derived
+// from the file bytes — so a rebuilt bundle gets a NEW url (?v=…) the browser
+// must fetch fresh. A plain reload can no longer serve a stale app.js.
+function digest(relPath) {
   const buf = readFileSync(resolve(root, relPath));
-  return 'sha384-' + createHash('sha384').update(buf).digest('base64');
+  return {
+    sri: 'sha384-' + createHash('sha384').update(buf).digest('base64'),
+    bust: createHash('sha1').update(buf).digest('hex').slice(0, 12),
+  };
 }
 
-// marker comment -> the exact tag line to emit (integrity filled in below)
+// marker comment -> the exact tag line to emit (integrity + cache-bust filled below)
 const tags = {
-  'SRI:app.css': (hash) =>
-    `  <link rel="stylesheet" href="dist/app.css" integrity="${hash}" crossorigin="anonymous"><!-- SRI:app.css -->`,
-  'SRI:app.js': (hash) =>
-    `  <script defer src="dist/app.js" integrity="${hash}" crossorigin="anonymous"></script><!-- SRI:app.js -->`,
+  'SRI:app.css': (h) =>
+    `  <link rel="stylesheet" href="dist/app.css?v=${h.bust}" integrity="${h.sri}" crossorigin="anonymous"><!-- SRI:app.css -->`,
+  'SRI:app.js': (h) =>
+    `  <script defer src="dist/app.js?v=${h.bust}" integrity="${h.sri}" crossorigin="anonymous"></script><!-- SRI:app.js -->`,
 };
 
-const hashes = { 'SRI:app.css': sri('dist/app.css'), 'SRI:app.js': sri('dist/app.js') };
+const hashes = { 'SRI:app.css': digest('dist/app.css'), 'SRI:app.js': digest('dist/app.js') };
 
 let html = readFileSync(HTML, 'utf8');
 for (const [marker, makeTag] of Object.entries(tags)) {
@@ -41,4 +47,4 @@ for (const [marker, makeTag] of Object.entries(tags)) {
 
 writeFileSync(HTML, html);
 console.log('[inject-sri] stamped:');
-for (const [marker, hash] of Object.entries(hashes)) console.log(`  ${marker}  ${hash}`);
+for (const [marker, h] of Object.entries(hashes)) console.log(`  ${marker}  ${h.sri}  ?v=${h.bust}`);
