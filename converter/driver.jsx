@@ -235,8 +235,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
               const det = PokerRegions.detectHero(flattenWords(data),
                 { bandOriginX, bandOriginY, bandScale: 1 });
               if (det) heroDetRef.current = { det, fresh: true };
-              // diagnostics: raw band OCR text + whether the hero plate matched
-              const dbg = { ready: true, ocr: ((data && data.text) || '').replace(/\s+/g, ' ').trim().slice(0, 60), matched: det ? det.text : null };
+              // diagnostics: raw band OCR text, the match, and the DETECTED plate
+              // position (full-frame px) so a card-box offset error is measurable.
+              const dbg = { ready: true, ocr: ((data && data.text) || '').replace(/\s+/g, ' ').trim().slice(0, 60), matched: det ? det.text : null,
+                plate: det ? { cx: Math.round(det.cx), cy: Math.round(det.cy), textH: Math.round(det.textH) } : null };
               heroDbgRef.current = dbg; setHeroDbg(dbg);
             })
             .catch(() => { /* OCR hiccup — keep the last-good anchor */ })
