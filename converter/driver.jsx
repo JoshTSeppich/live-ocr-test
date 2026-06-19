@@ -146,6 +146,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const [anchorStatus, setAnchorStatus] = React.useState('anchor-cold');
   const anchorStatusRef = React.useRef('anchor-cold');
   const heroWorkerRef = React.useRef(null); // dedicated band OCR worker (word bboxes)
+  const heroWorkerInitRef = React.useRef(false); // worker creation kicked off?
   const heroBusyRef = React.useRef(false);  // at most one band OCR in flight
   const heroDetRef = React.useRef(null);    // { det, fresh } — latest hero detection
 
@@ -190,6 +191,28 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const onFrame = React.useCallback((getCrops, dims) => {
     const { conv } = convRef.current;
     const vw = dims && dims.videoW, vh = dims && dims.videoH;
+
+    // ── Lazily create the dedicated hero-band OCR worker ONCE, here in the loop
+    // (NOT in a useEffect — an effect's cleanup could fire before createWorker
+    // resolves and discard the worker, which left the anchor permanently cold).
+    // By the time onFrame runs, useLiveOCR's main worker is already up.
+    if (!heroWorkerRef.current && !heroWorkerInitRef.current && typeof window !== 'undefined' && window.Tesseract) {
+      heroWorkerInitRef.current = true;
+      (async () => {
+        try {
+          const w = await window.Tesseract.createWorker('eng', 1, { langPath: 'https://tessdata.projectnaptha.com/4.0.0_best' });
+          await w.setParameters({ tessedit_pageseg_mode: '6' });
+          heroWorkerRef.current = w;
+          const dbg = { ...heroDbgRef.current, ready: true };
+          heroDbgRef.current = dbg; setHeroDbg(dbg);
+        } catch (e) {
+          console.warn('[hero-anchor] worker init failed:', e);
+          heroWorkerInitRef.current = false; // allow a retry on a later frame
+          const dbg = { ready: false, ocr: 'INIT FAILED: ' + (e && e.message || e), matched: null };
+          heroDbgRef.current = dbg; setHeroDbg(dbg);
+        }
+      })();
+    }
 
     // ── Hero-anchor: kick an async band OCR when the dedicated worker is free.
     // The band crop is full-resolution (useLiveOCR's source crop is NOT
@@ -303,39 +326,22 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   });
   regionTextRef.current = regionText; // keep the ref fresh for onFrame's closure
 
-  // Dedicated hero-band OCR worker: lives only while capturing. On stop/unmount
-  // it terminates and the anchor cache resets, so the next share re-detects from
-  // a clean cold start instead of inheriting a stale transform.
+  // Hero-band worker TEARDOWN only (creation is lazy, in onFrame). When capture
+  // isn't running, terminate the worker + reset the anchor cache so the next
+  // share re-detects from a clean cold start. No create/dispose race here.
   React.useEffect(() => {
-    if (status !== 'running') return undefined;
-    let disposed = false;
-    (async () => {
-      try {
-        const w = await window.Tesseract.createWorker('eng', 1, {
-          langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
-        });
-        await w.setParameters({ tessedit_pageseg_mode: '6' });
-        if (disposed) { try { await w.terminate(); } catch (_) {} return; }
-        heroWorkerRef.current = w;
-        const dbg = { ...heroDbgRef.current, ready: true };
-        heroDbgRef.current = dbg; setHeroDbg(dbg);
-      } catch (e) {
-        console.warn('[hero-anchor] worker init failed:', e);
-        const dbg = { ready: false, ocr: 'WORKER INIT FAILED: ' + (e && e.message || e), matched: null };
-        heroDbgRef.current = dbg; setHeroDbg(dbg);
-      }
-    })();
-    return () => {
-      disposed = true;
-      const w = heroWorkerRef.current; heroWorkerRef.current = null;
-      if (w) { try { w.terminate(); } catch (_) {} }
-      heroBusyRef.current = false;
-      heroDetRef.current = null;
-      anchorStatusRef.current = 'anchor-cold';
-      try { PokerRegions.resetAnchorCache(); } catch (_) {}
-      setAnchorStatus('anchor-cold');
-      setRegions(PokerRegions.captureRegions().concat(heroBandRegion));
-    };
+    if (status === 'running') return undefined;
+    const w = heroWorkerRef.current; heroWorkerRef.current = null;
+    if (w) { try { w.terminate(); } catch (_) {} }
+    heroWorkerInitRef.current = false;
+    heroBusyRef.current = false;
+    heroDetRef.current = null;
+    anchorStatusRef.current = 'anchor-cold';
+    try { PokerRegions.resetAnchorCache(); } catch (_) {}
+    setAnchorStatus('anchor-cold');
+    setHeroDbg({ ready: false, ocr: '', matched: null });
+    setRegions(PokerRegions.captureRegions().concat(heroBandRegion));
+    return undefined;
   }, [status, heroBandRegion]);
 
   React.useEffect(() => () => { try { convRef.current && convRef.current.botLink.close(); } catch (e) {} }, []);
