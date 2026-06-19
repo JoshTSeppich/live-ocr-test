@@ -61,6 +61,7 @@ function fmtCardCode(code) {
 }
 function readCardCell(matcher, cell) {
   if (!cell) return { state: 'none' };
+  if (cell.present === false) return { state: 'none' }; // is_present gate: empty slot, don't classify
   const m = matcher.match(cell.rgba, cell.w, cell.h);
   if (!m || m.confidence == null || m.confidence < CARD_MIN_CONF) {
     return { state: 'no-read', conf: m ? m.confidence : 0, guess: m ? m.card : null };

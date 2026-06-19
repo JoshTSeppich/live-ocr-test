@@ -264,6 +264,9 @@
     const minConf = opts.cardMinConfidence != null ? opts.cardMinConfidence : 0.85; // MATCHER_SPEC threshold
     if (!cells || !cardMatcher) return [];
     return cells.map((c) => {
+      // is_present gate: the detector flagged this slot empty (no card signature) —
+      // do NOT feed the crop to the classifier; report absent.
+      if (c && c.present === false) return { code: null, status: 'absent', confidence: 0 };
       const m = cardMatcher.match(c.rgba, c.w, c.h);
       if (!m || m.confidence == null || m.confidence < minConf) {
         return { code: null, status: 'no-read', confidence: m ? m.confidence : 0 };

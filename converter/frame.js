@@ -35,6 +35,35 @@
   // normalises size, but native is exact 55×130 (= the template source).
   const STRIP_W_NATIVE = 55, STRIP_H_NATIVE = 130, PITCH_NATIVE = 167;
 
+  // ─── in-region card-top DETECTOR thresholds (MEASURED from corpus, Stage 1) ──
+  // A board card is felt (lum~75, brightFrac≈0) → a SHARP, SUSTAINED white block
+  // (lum~240, brightFrac≈0.9-1.0). The detector finds that felt→white card edge
+  // and crops the calibrated strip from it — self-correcting the anchor's Y, which
+  // lands low at off-reference scales. These reject clutter (pot/chips/badges) that
+  // the upward-extended search window passes over: a chip/glyph is NOT felt→a
+  // full-width solid-white block sustained for CARD_TOP_BORDER rows.
+  const CARD_TOP_WHITE_FRAC = 0.80;   // "solid white" row: ≥80% of strip-width cols bright (measured card top ≈0.91-1.0)
+  const CARD_TOP_DARK_FRAC  = 0.25;   // "felt/dark" row: ≤25% bright (measured felt ≈0.00) — must sit just above the edge
+  const CARD_TOP_BORDER_FRAC = 0.07;  // TUNABLE clutter-rejector: solid-white top-border run, as a fraction of strip height
+                                      // (~9px at native 130). Longer = stricter (rejects more clutter, risks thin cards).
+  const CARD_TOP_FELT_GAP = 3;        // rows above the candidate top that must read felt (the sharp card edge)
+
+  // Detect a card's TOP row within cols [xL,xR) of `crop`: the first felt→solid-
+  // white card edge with a sustained white top-border. Returns the row, or -1 if
+  // no card signature is found (felt / clutter only) → is_present = false.
+  function _detectCardTop(crop, xL, xR, sh) {
+    xR = Math.min(xR, crop.w);
+    const border = Math.max(2, Math.round(CARD_TOP_BORDER_FRAC * sh));
+    for (let y = 1; y < crop.h - border; y++) {
+      if (_rowBright(crop, xL, xR, y) < CARD_TOP_WHITE_FRAC) continue;                 // not solid white
+      if (_rowBright(crop, xL, xR, Math.max(0, y - CARD_TOP_FELT_GAP)) > CARD_TOP_DARK_FRAC) continue; // no felt above → mid-card/chip
+      let solid = true;                                                               // sustained white border?
+      for (let k = 0; k < border; k++) if (_rowBright(crop, xL, xR, y + k) < CARD_TOP_WHITE_FRAC) { solid = false; break; }
+      if (solid) return y;
+    }
+    return -1;
+  }
+
   const _lum = (rgba, w, x, y) => { const i = (y * w + x) * 4; return (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3; };
   // fraction of rows in [y0,y1) at column x that are bright (lum > 150)
   function _colBright(crop, x, y0, y1) {
@@ -103,26 +132,36 @@
     const sh = Math.max(1, Math.round(STRIP_H_NATIVE * f));
 
     if (layout === 'hero') {
-      // rear: exposed sliver at the region's left corner
+      // Overlapped pair. rear exposed at the region's left corner; front begins one
+      // exposed-width (== strip width, measured front_x−rear_x==55) to its right.
+      // Detect each card's TOP (felt→white) so it lands on the rank corner, not the
+      // nameplate below; is_present gates a missing/occluded card → no classify.
       const rl = _whiteLeft(crop, 0, crop.w);
-      const rear = _cardStrip(crop, rl, rl + sw, sw, sh);
-      // front: begins one exposed-width (== strip width) to the right of the rear
       const fl = rl + sw;
-      const front = _cardStrip(crop, fl, Math.min(fl + sw, crop.w), sw, sh);
-      return [rear, front];
+      const mk = (x) => {
+        const top = _detectCardTop(crop, x, x + sw, sh);
+        return top >= 0
+          ? Object.assign(_cropStrip(crop, x, top, sw, sh), { present: true })
+          : Object.assign(_cropStrip(crop, x, 0, sw, sh), { present: false });
+      };
+      return [mk(rl), mk(fl)];
     }
 
-    // Board cards sit at FIXED, evenly-pitched slots (measured: residual ≤1px
-    // from a uniform 167-grid). So the slot left = cell left IS the card's left
-    // edge (= the calibration anchor bbox_x+30); a white-scan would only overshoot
-    // past the thin dark inter-card border into the body. Anchor at cell-left,
-    // scan the white TOP within the strip columns. (Pass xTo==xFrom so _cardStrip
-    // skips the horizontal scan and keeps cell-left.)
+    // Board cards sit at FIXED, evenly-pitched slots (residual ≤1px from a uniform
+    // grid), so the slot left = cell left = the card's body-left (calibration
+    // anchor). The VERTICAL is the problem: the anchor lands low at off-reference
+    // scales, so we DETECT each card's true top (felt→white edge) within the cell
+    // and crop the strip from there. is_present gates open slots (no card found).
     const cellW = crop.w / n;
     const cells = [];
     for (let i = 0; i < n; i++) {
       const cellL = Math.round(i * cellW);
-      cells.push(_cardStrip(crop, cellL, cellL, sw, sh));
+      const top = _detectCardTop(crop, cellL, cellL + sw, sh);
+      if (top < 0) {                                   // no card signature → absent slot
+        cells.push(Object.assign(_cropStrip(crop, cellL, 0, sw, sh), { present: false }));
+      } else {
+        cells.push(Object.assign(_cropStrip(crop, cellL, top, sw, sh), { present: true }));
+      }
     }
     return cells;
   }

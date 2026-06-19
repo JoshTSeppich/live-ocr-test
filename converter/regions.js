@@ -86,9 +86,17 @@
   //   proportionally without reflow (ADR_hero_anchor_regions), so the two
   //   sessions share one px reference, and these boxes place consistently with
   //   the numeric region boxes (pot above board; hole above the BC stack).
-  const BOARD_BOX = box(1053, 765, 835, 200);   // 5 cells of 167; strip anchor=(body-left,scan-start)
+  // y/h EXTENDED UP (was 765/200) to give the in-region card-top detector
+  // (frame.js _detectCardTop) upward scan room: at off-reference scales the anchor
+  // lands the box low, so the card top can be ABOVE the old box top — the window
+  // must bracket it. Top (635) stays below the pot (POT_BOX ends y=623) at both REF
+  // and live, so the detector's felt→white scan won't latch onto the pot.
+  const BOARD_BOX = box(1053, 635, 835, 330);   // 5 cells of 167; detector finds card top within
   const BOARD_CELLS = 5;
-  const HERO_HOLE_BOX = box(1360, 1235, 220, 160); // overlapped pair; rear strip @left, front @left+55
+  // y/h EXTENDED UP (was 1235/160) so the detector has scan room above the hole
+  // cards (the anchor lands the box on the nameplate live; cards are above it).
+  // The detector scans top-down and finds the card top BEFORE the nameplate below.
+  const HERO_HOLE_BOX = box(1360, 1105, 220, 290); // overlapped pair; rear @left, front @left+55; detector finds tops
   const HERO_HOLE_CELLS = 2;
 
   // §0.8 — button-puck slot anchors (puck CENTERS, not boxes). The puck is

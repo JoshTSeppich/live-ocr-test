@@ -86,22 +86,30 @@ function run(layout, frame, cap, cells, truths, bboxes, t) {
   }
 }
 
-// ── BOARD: crop BOARD_BOX, slice 5; cards snap to FIXED slots (1023+k·167),
-// NOT sequential — map each card to its slot k and compare that cell's strip. ──
+// ── BOARD: crop the (extended) BOARD_BOX, slice 5; the DETECTOR finds each card's
+// top + sets present. Cards snap to FIXED slots (1023+k·167). We score both the
+// is_present gate (TP/FP/FN — FP = a chip/clutter mistaken for a card) and the
+// read quality on present cards. ──
 const FIRST_SLOT_X = 1023, PITCH = 167;
 const tb = tally();
+const presence = { TP: 0, FP: 0, FN: 0, TN: 0, fp: [], fn: [] };
 for (const fr of board.boards) {
   const png = load(board.capture_dir, fr.frame);
   const bb = R.BOARD_BOX;
   const crop = cropRegion(png, bb.x, bb.y, bb.w, bb.h);
   const cells = F.sliceCells(crop, R.BOARD_CELLS, { layout: 'board' });
-  const codes = [], boxes = [], slotCells = [];
+  const truthBySlot = {};
   for (const c of fr.cards) {
     const k = Math.round((c.bbox[0] - FIRST_SLOT_X) / PITCH);
-    if (k < 0 || k >= R.BOARD_CELLS) continue; // off-board outlier (mid-animation)
-    slotCells.push(cells[k]); codes.push(norm(c.card)); boxes.push(c.bbox);
+    if (k >= 0 && k < R.BOARD_CELLS) truthBySlot[k] = c;
   }
-  run('board', fr.frame, board.capture_dir, slotCells, codes, boxes, tb);
+  for (let i = 0; i < R.BOARD_CELLS; i++) {
+    const cell = cells[i], present = !!(cell && cell.present), truth = truthBySlot[i];
+    if (present && truth) { presence.TP++; run('board', fr.frame, board.capture_dir, [cell], [norm(truth.card)], [truth.bbox], tb); }
+    else if (present && !truth) { presence.FP++; if (presence.fp.length < 12) presence.fp.push(fr.frame + ' slot' + i); }
+    else if (!present && truth) { presence.FN++; if (presence.fn.length < 12) presence.fn.push(fr.frame + ' slot' + i + ' ' + truth.card); }
+    else presence.TN++;
+  }
 }
 // ── HERO: crop HERO_HOLE_BOX, slice 2 (overlap), match rear+front ──
 const th = tally();
@@ -125,6 +133,9 @@ function report(name, t) {
   console.log(`  CROP DELTA vs calibration: max ${t.deltaMax}  mean ${(t.deltaMeanSum / Math.max(t.deltaN, 1)).toFixed(3)}  (strips differing from contract: ${t.anchorOff.length}/${t.deltaN})`);
 }
 report('BOARD', tb);
+console.log(`  is_present gate: TP ${presence.TP}  FP ${presence.FP} (chip/clutter read as card)  FN ${presence.FN} (card missed)  TN ${presence.TN} (empty slot OK)`);
+if (presence.fp.length) console.log('    FP (chip mistaken for card):', JSON.stringify(presence.fp));
+if (presence.fn.length) console.log('    FN (card missed):', JSON.stringify(presence.fn));
 report('HERO', th);
 const totalWrong = tb.suitConfWrong + th.suitConfWrong;
 console.log(`\n*** BAR: zero confident same-colour suit errors -> ${totalWrong === 0 ? 'PASS ✓' : 'FAIL ✗'} ***`);
