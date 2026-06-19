@@ -52,6 +52,9 @@ function flattenWords(data) {
 // (PokerFrame.sliceCells), same matcher, same 0.85 confidence gate as
 // observation.readCardCells. Returns a small display record per card.
 const CARD_MIN_CONF = 0.85; // == observation.readCardCells default
+const DIM_MIN_CONF = 0.95; // dim (showdown) cards: a white-calibrated match is untrustworthy, so demand
+                           // a strict bar — a dim-vs-white mismatch stays moderate → no-read; a dim card
+                           // matched to a future DIM template clears it. Never emits a confident read on dim.
 const SUIT_GLYPH = { h: '♥', d: '♦', s: '♠', c: '♣' };
 function fmtCardCode(code) {
   if (!code || code.length < 2) return { text: code || '?', red: false };
@@ -63,6 +66,12 @@ function readCardCell(matcher, cell) {
   if (!cell) return { state: 'none' };
   if (cell.present === false) return { state: 'none' }; // is_present gate: empty slot, don't classify
   const m = matcher.match(cell.rgba, cell.w, cell.h);
+  if (cell.dim) {
+    // DIM (showdown) card: never trust a white-calibrated match → never confident.
+    // suit ALWAYS abstains; rank only as a TENTATIVE abstain above a strict bar.
+    if (!m || m.confidence == null || m.confidence < DIM_MIN_CONF) return { state: 'no-read', conf: m ? m.confidence : 0, guess: m ? m.card : null, dim: true };
+    return { state: 'abstain', conf: m.confidence, code: m.card, dim: true };
+  }
   if (!m || m.confidence == null || m.confidence < CARD_MIN_CONF) {
     return { state: 'no-read', conf: m ? m.confidence : 0, guess: m ? m.card : null };
   }

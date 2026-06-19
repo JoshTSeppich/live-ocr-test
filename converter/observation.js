@@ -262,12 +262,20 @@
   function readCardCells(cells, cardMatcher, opts) {
     opts = opts || {};
     const minConf = opts.cardMinConfidence != null ? opts.cardMinConfidence : 0.85; // MATCHER_SPEC threshold
+    const dimMinConf = opts.dimMinConfidence != null ? opts.dimMinConfidence : 0.95; // dim cards demand a strict bar
     if (!cells || !cardMatcher) return [];
     return cells.map((c) => {
       // is_present gate: the detector flagged this slot empty (no card signature) —
       // do NOT feed the crop to the classifier; report absent.
       if (c && c.present === false) return { code: null, status: 'absent', confidence: 0 };
       const m = cardMatcher.match(c.rgba, c.w, c.h);
+      // dim (showdown) card: a white-calibrated match is untrustworthy → ABSTAIN
+      // (never a confident read) unless it clears a strict bar; suit not trusted.
+      // Holds never-confidently-wrong on dimmed board AND villain showdown cards.
+      if (c && c.dim) {
+        if (!m || m.confidence == null || m.confidence < dimMinConf) return { code: null, status: 'no-read', confidence: m ? m.confidence : 0, dim: true };
+        return { code: m.card != null ? m.card : m.code, status: 'abstain', confidence: m.confidence, dim: true };
+      }
       if (!m || m.confidence == null || m.confidence < minConf) {
         return { code: null, status: 'no-read', confidence: m ? m.confidence : 0 };
       }

@@ -56,28 +56,33 @@ function stripDelta(a, b) { // max + mean abs RGBA diff over identical-size stri
 
 const SUITS = ['c', 'd', 'h', 's'];
 const ink = (s) => (s === 'h' || s === 'd' ? 'red' : 'black');
-function tally() { return { total: 0, rankOK: 0, colorOK: 0, suitConfOK: 0, suitConfWrong: 0, abstain: 0, noread: 0, rawRankOK: 0, rawColorOK: 0, deltaMax: 0, deltaMeanSum: 0, deltaN: 0, anchorOff: [] }; }
+function tally() { return { total: 0, rankOK: 0, colorOK: 0, suitConfOK: 0, suitConfWrong: 0, abstain: 0, noread: 0, rawRankOK: 0, rawColorOK: 0, deltaMax: 0, deltaMeanSum: 0, deltaN: 0, anchorOff: [], dimCount: 0, dimWouldWrong: 0, whiteTotal: 0, whiteRankOK: 0 }; }
 const wrong = [];
 function run(layout, frame, cap, cells, truths, bboxes, t) {
   for (let i = 0; i < truths.length; i++) {
     const strip = cells[i];
     t.total++;
-    // crop-delta vs calibration anchor
+    const truthRank = truths[i][0], truthSuit = truths[i][1];
+    const m = matcher.match(strip.rgba, strip.w, strip.h);
+    // ── DIM (showdown) cards: the read-path GUARD forces ABSTAIN (never confident),
+    // so production confident-wrong on dim is 0 BY CONSTRUCTION. Diagnose what the
+    // guard PREVENTS: how many would have been confident-wrong without it.
+    if (strip.dim) {
+      t.dimCount++;
+      const confident = m && m.confidence != null && m.confidence >= 0.95;
+      if (confident && m.suitConfident && m.suit !== truthSuit) t.dimWouldWrong++;
+      continue;
+    }
+    // crop-delta vs calibration anchor (white cards only)
     const png = load(cap, frame);
     const [bx, by, , bh] = bboxes[i];
     const calLeft = layout === 'board' ? bx + 30 : bx;
     const calTop = calCardTop(png, calLeft, by, 55, bh);
-    const cal = calStrip(png, calLeft, calTop);
-    const d = stripDelta(strip, cal);
+    const d = stripDelta(strip, calStrip(png, calLeft, calTop));
     t.deltaMax = Math.max(t.deltaMax, d.max); t.deltaMeanSum += d.mean; t.deltaN++;
     if (d.max > 0) t.anchorOff.push({ frame, i, truth: truths[i], delta: d });
-    // match
-    const m = matcher.match(strip.rgba, strip.w, strip.h);
-    const truthRank = truths[i][0], truthSuit = truths[i][1];
-    // RAW (ungated) strip quality — what the strip resolves to regardless of the
-    // live 0.85 confidence gate (matches validate-suit-corpus counting).
-    if (m) { if (m.card[0] === truthRank) t.rawRankOK++; if (ink(m.suit) === ink(truthSuit)) t.rawColorOK++; }
-    // GATED — the live readCardCells withholds < 0.85 (no-read).
+    if (m) { if (m.card[0] === truthRank) { t.rawRankOK++; } if (ink(m.suit) === ink(truthSuit)) t.rawColorOK++; }
+    t.whiteTotal++; if (m && m.card[0] === truthRank) t.whiteRankOK++;
     if (!m || m.confidence == null || m.confidence < 0.85) { t.noread++; continue; }
     if (m.card[0] === truthRank) t.rankOK++;
     if (ink(m.suit) === ink(truthSuit)) t.colorOK++;
@@ -98,17 +103,22 @@ for (const fr of board.boards) {
   const bb = R.BOARD_BOX;
   const crop = cropRegion(png, bb.x, bb.y, bb.w, bb.h);
   const cells = F.sliceCells(crop, R.BOARD_CELLS, { layout: 'board' });
-  // sequential detector: cells (present, x-order) vs truth cards (x-order)
-  const detected = cells.filter((c) => c && c.present);
+  // Match each detected card to the nearest truth card by FRAME x (body-left), as
+  // production does — each card reads independently. This isolates an FP (no nearby
+  // truth) instead of letting it shift the whole sequence (which would mis-blame the
+  // real cards). detected.x is region-local; +BOARD_BOX.x → frame; truth body-left
+  // = bbox_x+30.
+  const detected = cells.filter((c) => c && c.present).map((c) => ({ c, fx: bb.x + c.x }));
   const truth = [...fr.cards].sort((a, b) => a.bbox[0] - b.bbox[0]);
-  const m = Math.max(detected.length, truth.length);
-  for (let i = 0; i < m; i++) {
-    const cell = detected[i], t = truth[i];
-    if (cell && t) { presence.TP++; run('board', fr.frame, board.capture_dir, [cell], [norm(t.card)], [t.bbox], tb); }
-    else if (cell && !t) { presence.FP++; if (presence.fp.length < 12) presence.fp.push(fr.frame + ' #' + i); }
-    else if (!cell && t) { presence.FN++; if (presence.fn.length < 12) presence.fn.push(fr.frame + ' #' + i + ' ' + t.card); }
+  const usedT = new Set();
+  for (const d of detected) {
+    let bestT = -1, bestDist = 1e9;
+    for (let k = 0; k < truth.length; k++) { if (usedT.has(k)) continue; const dist = Math.abs(d.fx - (truth[k].bbox[0] + 30)); if (dist < bestDist) { bestDist = dist; bestT = k; } }
+    if (bestT >= 0 && bestDist <= 80) { usedT.add(bestT); presence.TP++; run('board', fr.frame, board.capture_dir, [d.c], [norm(truth[bestT].card)], [truth[bestT].bbox], tb); }
+    else { presence.FP++; if (presence.fp.length < 12) presence.fp.push(fr.frame + ' @' + d.fx + (d.c.dim ? ' dim' : '')); }
   }
-  presence.TN += R.BOARD_CELLS - Math.max(detected.length, truth.length); // trailing empty slots correctly absent
+  for (let k = 0; k < truth.length; k++) if (!usedT.has(k)) { presence.FN++; if (presence.fn.length < 12) presence.fn.push(fr.frame + ' ' + truth[k].card); }
+  presence.TN += Math.max(0, R.BOARD_CELLS - Math.max(detected.length, truth.length));
 }
 // ── HERO: crop HERO_HOLE_BOX, slice 2 (overlap), match rear+front ──
 const th = tally();
@@ -125,19 +135,20 @@ for (const hd of hero.hands) {
 
 function report(name, t) {
   const reads = t.suitConfOK + t.suitConfWrong;
-  console.log(`\n=== ${name} (${t.total} card instances) ===`);
-  console.log(`  RAW strip quality (ungated): rank ${t.rawRankOK}/${t.total} (${(100 * t.rawRankOK / t.total).toFixed(1)}%)  color ${t.rawColorOK}/${t.total} (${(100 * t.rawColorOK / t.total).toFixed(1)}%)`);
-  console.log(`  GATED (live @0.85): rank ${t.rankOK}/${t.total} (${(100 * t.rankOK / t.total).toFixed(1)}%)  color ${t.colorOK}/${t.total} (${(100 * t.colorOK / t.total).toFixed(1)}%)`);
-  console.log(`  suit confident: ${reads}  correct ${t.suitConfOK}  WRONG ${t.suitConfWrong}   abstain ${t.abstain}   no-read(<0.85) ${t.noread}`);
-  console.log(`  CROP DELTA vs calibration: max ${t.deltaMax}  mean ${(t.deltaMeanSum / Math.max(t.deltaN, 1)).toFixed(3)}  (strips differing from contract: ${t.anchorOff.length}/${t.deltaN})`);
+  console.log(`\n=== ${name} (${t.total} card instances; ${t.whiteTotal} white + ${t.dimCount} dim) ===`);
+  console.log(`  WHITE (non-showdown) rank: ${t.whiteRankOK}/${t.whiteTotal} (${(100 * t.whiteRankOK / Math.max(t.whiteTotal, 1)).toFixed(1)}%)  ← must hold the 93.9% baseline`);
+  console.log(`  GATED (live @0.85, white): rank ${t.rankOK}/${t.whiteTotal} (${(100 * t.rankOK / Math.max(t.whiteTotal, 1)).toFixed(1)}%)`);
+  console.log(`  suit confident (white): ${reads}  correct ${t.suitConfOK}  WRONG ${t.suitConfWrong}   abstain ${t.abstain}   no-read ${t.noread}`);
+  console.log(`  DIM (showdown): ${t.dimCount} detected → ALL abstain via guard (0 confident).  guard prevented ${t.dimWouldWrong} would-be confident-wrong`);
+  console.log(`  CROP DELTA vs calibration (white): max ${t.deltaMax}  mean ${(t.deltaMeanSum / Math.max(t.deltaN, 1)).toFixed(3)}  (differ: ${t.anchorOff.length}/${t.deltaN})`);
 }
 report('BOARD', tb);
 console.log(`  is_present gate: TP ${presence.TP}  FP ${presence.FP} (chip/clutter read as card)  FN ${presence.FN} (card missed)  TN ${presence.TN} (empty slot OK)`);
 if (presence.fp.length) console.log('    FP (chip mistaken for card):', JSON.stringify(presence.fp));
 if (presence.fn.length) console.log('    FN (card missed):', JSON.stringify(presence.fn));
 report('HERO', th);
-const totalWrong = tb.suitConfWrong + th.suitConfWrong;
-console.log(`\n*** BAR: zero confident same-colour suit errors -> ${totalWrong === 0 ? 'PASS ✓' : 'FAIL ✗'} ***`);
+const totalWrong = tb.suitConfWrong + th.suitConfWrong; // dim is guarded → abstain → 0 in production
+console.log(`\n*** BAR: zero confident-wrong in production -> ${totalWrong === 0 ? 'PASS ✓' : 'FAIL ✗'}  (white suit-wrong ${totalWrong}; dim guarded, prevented ${tb.dimWouldWrong + th.dimWouldWrong}) ***`);
 if (wrong.length) console.log('CONFIDENT WRONG:', JSON.stringify(wrong.slice(0, 20), null, 1));
 // show a couple of nonzero deltas if any
 const sample = [...tb.anchorOff, ...th.anchorOff].slice(0, 6);

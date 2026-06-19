@@ -52,13 +52,27 @@
   const CARD_BODY_FRAC = 0.70;        // how far below the top to verify (fraction of strip height) — a card is TALL
   const CARD_BODY_FRAC_BRIGHT = 0.40; // a "still on the card" row: ≥40% of the run cols bright (rank-ink dip tolerated)
   const CARD_BODY_MIN = 0.80;         // ≥80% of those rows must be card-bright (short banners/badges fail)
+  // ── showdown-DIM handling (two-pass) ──────────────────────────────────────
+  // At showdown the client GRAYS cards not in the winning hand (board AND villain
+  // hole cards), body lum ~120-150 vs white ~240. The PRIMARY pass uses the
+  // absolute white bar below (untouched — keeps the 93.9%/0-FP/0-wrong baseline). A
+  // SECOND pass then fills only the GAPS the primary left, at a RELATIVE bar, and
+  // keeps only genuinely-DIM cards. Any dim card is then forced to ABSTAIN in the
+  // read path (engine never trusts a white-calibrated match on a dim render) — so
+  // even imperfect dim detection can't produce a confident-wrong read.
+  const BRIGHT_WHITE = 150;           // absolute white-body bar (the primary pass — measured corpus white ≈240, felt ≈75)
+  const FELT_BAND_FRAC = 0.12;        // top band of a region used to estimate local felt (sits above the cards)
+  const BRIGHT_MARGIN = 30;           // RELATIVE bar = feltLevel + this (catches dim bodies ≥ felt+~40 while excluding felt)
+  const DIM_BODY_GAP = 110;           // a card is DIM if its body brightness exceeds felt by LESS than this
+                                      // (measured: dim body ≈ felt+69, white ≈ felt+150 → 110 splits them at any dim level)
 
   // Longest run of consecutive bright (lum>150) columns at row y within [xL,xR).
   // The card's white top border is a long run; a chip/glyph/text is a short one.
-  function _brightRun(crop, xL, xR, y) {
+  function _brightRun(crop, xL, xR, y, th) {
+    th = th == null ? BRIGHT_WHITE : th;
     let run = 0, runStart = -1, bestLen = 0, bestStart = -1;
     for (let x = xL; x < xR; x++) {
-      if (_lum(crop.rgba, crop.w, x, y) > 150) { if (run === 0) runStart = x; run++; if (run > bestLen) { bestLen = run; bestStart = runStart; } }
+      if (_lum(crop.rgba, crop.w, x, y) > th) { if (run === 0) runStart = x; run++; if (run > bestLen) { bestLen = run; bestStart = runStart; } }
       else run = 0;
     }
     return { start: bestStart, len: bestLen };
@@ -69,18 +83,19 @@
   // anchor); the row = the white TOP. Returns {left,top} or null if no card
   // signature (felt/clutter only) → is_present=false. Self-corrects BOTH axes: the
   // anchor can be off in x (live card pitch/width drift) as well as y.
-  function _detectCardCorner(crop, xL, xR, sw, sh) {
+  function _detectCardCorner(crop, xL, xR, sw, sh, th) {
+    th = th == null ? BRIGHT_WHITE : th;
     xR = Math.min(xR, crop.w);
     const border = Math.max(2, Math.round(CARD_TOP_BORDER_FRAC * sh));
     const minRun = Math.max(3, Math.round(sw * 0.8)); // a card top spans ≥ a strip width; a chip/glyph does not
     const bodyRows = Math.max(border + 1, Math.round(sh * CARD_BODY_FRAC)); // a card is TALL; clutter is short
     for (let y = 1; y < crop.h - border; y++) {
-      const r = _brightRun(crop, xL, xR, y);
+      const r = _brightRun(crop, xL, xR, y, th);
       if (r.len < minRun) continue;                                                   // no card-width white run
       const rL = r.start, rR = rL + minRun;
-      if (_rowBright(crop, rL, rR, Math.max(0, y - CARD_TOP_FELT_GAP)) > CARD_TOP_DARK_FRAC) continue; // no felt above → mid-card/chip
+      if (_rowBright(crop, rL, rR, Math.max(0, y - CARD_TOP_FELT_GAP), th) > CARD_TOP_DARK_FRAC) continue; // no felt above → mid-card/chip
       let solid = true;                                                               // sustained white border under the run?
-      for (let k = 0; k < border; k++) if (_rowBright(crop, rL, rR, y + k) < CARD_TOP_WHITE_FRAC) { solid = false; break; }
+      for (let k = 0; k < border; k++) if (_rowBright(crop, rL, rR, y + k, th) < CARD_TOP_WHITE_FRAC) { solid = false; break; }
       if (!solid) continue;
       // CARD-BODY check: a card stays mostly bright for ~its height below the top
       // (rank ink only dips it); short clutter (badges/text/chips) hits felt fast.
@@ -88,7 +103,7 @@
       // band, which holds the rank glyph and would penalise ink-heavy ranks (5,10…).
       const bR = Math.min(rL + r.len, xR);
       let body = 0, rows = 0;
-      for (let k = 0; k < bodyRows && y + k < crop.h; k++) { rows++; if (_rowBright(crop, rL, bR, y + k) > CARD_BODY_FRAC_BRIGHT) body++; }
+      for (let k = 0; k < bodyRows && y + k < crop.h; k++) { rows++; if (_rowBright(crop, rL, bR, y + k, th) > CARD_BODY_FRAC_BRIGHT) body++; }
       if (!rows || body / rows < CARD_BODY_MIN) continue;
       // LEFT = the white-body edge measured a few rows BELOW the top, past the
       // rounded top-left corner (where the edge is straight). The top row's bright
@@ -96,27 +111,65 @@
       // straight-edge row gives the true body-left (== calibration anchor).
       const lrow = Math.min(crop.h - 1, y + border);
       let left = xL;
-      for (let x = xL; x < xR; x++) { if (_lum(crop.rgba, crop.w, x, lrow) > 150) { left = x; break; } }
+      for (let x = xL; x < xR; x++) { if (_lum(crop.rgba, crop.w, x, lrow) > th) { left = x; break; } }
       // right = end of the card-width top run (its right edge), for advancing the
       // sequential board scan past this card to find the next one.
       return { left, top: y, right: rL + r.len };
     }
     return null;
   }
-  // Scan a region left→right and detect up to `max` card corners SEQUENTIALLY,
-  // advancing past each found card. Self-corrects card COUNT and PITCH — the live
-  // board centres/spreads cards by count, so a fixed even-cell grid misaligns; this
-  // finds the cards wherever they actually sit.
-  function _detectBoardCards(crop, sw, sh, max) {
+  // One left→right sweep at threshold `th`, up to `max` corners, advancing past each.
+  function _sweep(crop, sw, sh, max, th) {
     const found = [];
     let x = 0;
     while (x < crop.w - Math.round(sw * 0.5) && found.length < max) {
-      const c = _detectCardCorner(crop, x, crop.w, sw, sh);
+      const c = _detectCardCorner(crop, x, crop.w, sw, sh, th);
       if (!c) break;
       found.push(c);
       x = Math.max(c.left + sw, c.right) + 2; // past this card, then look for the next
     }
     return found;
+  }
+  // TWO-PASS board detection. PRIMARY: precise white-card sweep at the absolute bar
+  // (untouched baseline). SECOND: only if cards are missing, sweep at the RELATIVE
+  // bar and keep corners that (a) don't overlap a primary card and (b) are genuinely
+  // DIM — tagging them {dim:true} so the read path forces them to abstain. Best-
+  // effort: any dim card the second pass finds is safe (abstains); ones it misses
+  // just no-read. The primary path is never altered, so the baseline can't regress.
+  function _detectBoardCards(crop, sw, sh, max) {
+    const primary = _sweep(crop, sw, sh, max, BRIGHT_WHITE);
+    const felt = _feltLevel(crop), dimTh = felt + BRIGHT_MARGIN;
+    // Re-flag any primary card whose body is actually DIM (a showdown card whose
+    // body grazes the white bar can be caught by the primary). Flagging it → the
+    // read path abstains, so a borderline dim card never reads against white
+    // templates. The primary DETECTION (count/framing) is unchanged — only the tag.
+    for (const c of primary) if (_cardIsDim(crop, c, sw, sh, felt)) c.dim = true;
+    if (primary.length >= max) return primary;
+    // SECOND pass: scan only the GAPS the primary left (before/between/after its
+    // cards), each bounded — so a dim card whose top sits lower than a neighbouring
+    // white card isn't skipped (the y-first detector would otherwise jump to the
+    // white card). Keep only genuinely-dim finds; tag {dim:true} → read path abstains.
+    const sorted = primary.slice().sort((a, b) => a.left - b.left);
+    const bounds = []; let prev = 0;
+    for (const c of sorted) { bounds.push([prev, c.left]); prev = c.right; }
+    bounds.push([prev, crop.w]);
+    const dim = [];
+    for (const [gL, gR] of bounds) {
+      if (gR - gL < Math.round(sw * 0.8)) continue;                  // gap too small for a card
+      let x = gL;
+      while (x < gR - Math.round(sw * 0.5) && primary.length + dim.length < max) {
+        const c = _detectCardCorner(crop, x, gR, sw, sh, dimTh);
+        if (!c) break;
+        if (_cardIsDim(crop, c, sw, sh, felt)) { c.dim = true; dim.push(c); }
+        x = Math.max(c.left + sw, c.right) + 2;
+      }
+    }
+    // Primary (white) cards are real reads and must NEVER be dropped by the cap — a
+    // spurious dim find must not displace a true card. Keep all primary, then fill
+    // remaining slots with dim, then order by position.
+    const out = primary.slice();
+    for (const d of dim) { if (out.length >= max) break; out.push(d); }
+    return out.sort((a, b) => a.left - b.left);
   }
 
   const _lum = (rgba, w, x, y) => { const i = (y * w + x) * 4; return (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3; };
@@ -127,10 +180,32 @@
     return tot ? n / tot : 0;
   }
   // fraction of cols in [x0,x1) at row y that are bright
-  function _rowBright(crop, x0, x1, y) {
+  function _rowBright(crop, x0, x1, y, th) {
+    th = th == null ? BRIGHT_WHITE : th;
     let n = 0, tot = 0;
-    for (let x = x0; x < x1; x++) { tot++; if (_lum(crop.rgba, crop.w, x, y) > 150) n++; }
+    for (let x = x0; x < x1; x++) { tot++; if (_lum(crop.rgba, crop.w, x, y) > th) n++; }
     return tot ? n / tot : 0;
+  }
+  // Local felt level: median luminance of the region's top band (above the cards),
+  // stable whether or not cards are dimmed — the basis for the RELATIVE dim bar.
+  function _feltLevel(crop) {
+    const band = Math.max(4, Math.round(crop.h * FELT_BAND_FRAC));
+    const vals = [];
+    for (let y = 0; y < band; y++) for (let x = 0; x < crop.w; x += 2) vals.push(_lum(crop.rgba, crop.w, x, y));
+    if (!vals.length) return 80;
+    vals.sort((a, b) => a - b);
+    return vals[vals.length >> 1];
+  }
+  // Is the card at corner c DIM (showdown-grayed)? Median of the bright body pixels
+  // in its top-strip region; dim if that body barely exceeds felt (measured: dim
+  // body ≈ felt+69, white ≈ felt+150). Adapts to any dim level (relative to felt).
+  function _cardIsDim(crop, c, sw, sh, felt) {
+    const x1 = Math.min(c.left + sw, crop.w), y1 = Math.min(c.top + sh, crop.h);
+    const v = [];
+    for (let y = c.top; y < y1; y++) for (let x = c.left; x < x1; x++) { const L = _lum(crop.rgba, crop.w, x, y); if (L > felt + BRIGHT_MARGIN) v.push(L); }
+    if (!v.length) return true;
+    v.sort((a, b) => a - b);
+    return (v[v.length >> 1] - felt) < DIM_BODY_GAP;
   }
   // First column (scanning right from xFrom, bounded by xTo) whose vertical
   // brightness over the crop exceeds 0.4 — the card's white-body LEFT edge.
@@ -215,7 +290,7 @@
     const cells = [];
     for (let i = 0; i < n; i++) {
       cells.push(found[i]
-        ? Object.assign(_cropStrip(crop, found[i].left, found[i].top, sw, sh), { present: true })
+        ? Object.assign(_cropStrip(crop, found[i].left, found[i].top, sw, sh), { present: true, dim: !!found[i].dim, x: found[i].left })
         : absent(Math.round(i * crop.w / n)));
     }
     return cells;
