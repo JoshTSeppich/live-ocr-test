@@ -498,14 +498,18 @@ class MultiSignatureMatcher {
       if (combined < bestDist) { bestDist = combined; best = card; }
     }
     if (!best) return null;
+    // MULTI-INSTANCE: a card may be taught from several frames/renders, stored under
+    // suffixed keys ('9d#0','9d#1'…) that each compete above as their own template
+    // (best-of-instances for free). Strip the suffix to recover the card code.
+    const code = best.indexOf('#') >= 0 ? best.slice(0, best.indexOf('#')) : best;
     // Rank + red/black colour from the hash are reliable; the corner pip is what
     // the card hash under-resolves, so refine the suit with Component 4. When it
     // abstains we keep the hash's suit but flag it unconfident with the 2-way
     // alternatives — never a silent confident guess on a same-colour pair.
-    const rank = best[0];
-    const color = (best[1] === 'h' || best[1] === 'd') ? 'red' : 'black';
+    const rank = code[0];
+    const color = (code[1] === 'h' || code[1] === 'd') ? 'red' : 'black';
     const ps = readSuitFromPip(rgba, w, h, color);
-    let card = best, suitConfident = true, suitAlternatives = null;
+    let card = code, suitConfident = true, suitAlternatives = null;
     if (ps && ps.suit) card = rank + ps.suit;
     else { suitConfident = false; suitAlternatives = color === 'red' ? ['h', 'd'] : ['s', 'c']; }
     return {
