@@ -161,6 +161,20 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   // box that's off the cards is visible at a glance (and measurable).
   const frameSnapRef = React.useRef(null);   // getFrameSnapshot, set after useLiveOCR
   const overlayCanvasRef = React.useRef(null);
+  // Live calibration NUDGE (REF px) for the board / hero card boxes — adjust until
+  // the boxes sit on the cards and they read; persisted so it survives reloads.
+  const NUDGE_KEY = 'card-box-nudge';
+  const [nudge, setNudge] = React.useState(() => {
+    try { return Object.assign({ bdx: 0, bdy: 0, hdx: 0, hdy: 0 }, JSON.parse(localStorage.getItem(NUDGE_KEY) || '{}')); }
+    catch (_) { return { bdx: 0, bdy: 0, hdx: 0, hdy: 0 }; }
+  });
+  const nudgeRef = React.useRef(nudge);
+  nudgeRef.current = nudge;
+  const bumpNudge = React.useCallback((k, d) => setNudge((n) => {
+    const next = { ...n, [k]: (n[k] || 0) + d };
+    try { localStorage.setItem(NUDGE_KEY, JSON.stringify(next)); } catch (_) {}
+    return next;
+  }), []);
   // Visible previews of the actual board/hero crops fed to the matcher (so a
   // misplaced region box is obvious — felt instead of cards).
   const boardCanvasRef = React.useRef(null);
@@ -261,13 +275,23 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       const det = pending && pending.fresh ? pending.det : null;
       if (pending) pending.fresh = false;
       const placed = PokerRegions.computeAnchoredRegions(det, vw, vh);
-      setRegions(placed.regions.concat(heroBandRegion));
+      // anchor scale (REF px → live px): from the detected plate text height
+      const k = (heroDbgRef.current.plate && heroDbgRef.current.plate.textH)
+        ? (heroDbgRef.current.plate.textH / PokerRegions.REF_HERO.textH)
+        : (vh / PokerRegions.REF_FRAME.h);
+      // apply the live calibration nudge (REF px) to the board / hero card boxes
+      const nf = nudgeRef.current;
+      const shift = (r, dx, dy) => ({ ...r, x: r.x + (dx * k) / vw, y: r.y + (dy * k) / vh });
+      const adj = placed.regions.map((r) =>
+        r.id === 'board' ? shift(r, nf.bdx, nf.bdy)
+        : r.id === 'hero_hole' ? shift(r, nf.hdx, nf.hdy) : r);
+      setRegions(adj.concat(heroBandRegion));
       if (placed.status !== anchorStatusRef.current) {
         anchorStatusRef.current = placed.status;
         setAnchorStatus(placed.status);
       }
 
-      // ── Calibration overlay: draw the whole frame + the placed region boxes,
+      // ── Calibration overlay: draw the whole frame + the (nudged) region boxes,
       // so a box sitting off the cards is obvious (and the offset is measurable).
       try {
         const snap = frameSnapRef.current && frameSnapRef.current(480);
@@ -279,7 +303,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           ctx.putImageData(new ImageData(data, snap.w, snap.h), 0, 0);
           const colors = { board: '#3df0a0', hero_hole: '#ff6b6b', hero_band: '#55aaff' };
           ctx.lineWidth = 1.5; ctx.font = '9px monospace';
-          for (const r of placed.regions.concat(heroBandRegion)) {
+          for (const r of adj.concat(heroBandRegion)) {
             const c = colors[r.id]; if (!c) continue;
             const x = r.x * snap.w, y = r.y * snap.h, w = r.w * snap.w, h = r.h * snap.h;
             ctx.strokeStyle = c; ctx.strokeRect(x, y, w, h);
@@ -453,6 +477,19 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           React.createElement('div', null,
             React.createElement('canvas', { ref: boardCanvasRef, style: { display: 'block', border: '1px solid #2a2a2a', background: '#000' } }),
             React.createElement('canvas', { ref: heroCanvasRef, style: { display: 'block', marginTop: 4, border: '1px solid #2a2a2a', background: '#000' } }))),
+        // NUDGE controls: move the board(green)/hero(red) boxes until they sit on
+        // the cards and the reads light up. Values persist; tell me the numbers.
+        (() => {
+          const nb = (label, key, d) => React.createElement('button', { onClick: () => bumpNudge(key, d), style: { fontSize: 12, padding: '1px 6px', marginRight: 2 } }, label);
+          const grp = (name, kx, ky) => React.createElement('span', { style: { marginRight: 12, whiteSpace: 'nowrap' } },
+            React.createElement('span', { style: { color: '#888', marginRight: 4 } }, name + ':'),
+            nb('↑', ky, -10), nb('↓', ky, 10), nb('←', kx, -10), nb('→', kx, 10));
+          return React.createElement('div', { style: { ...S.cardsRow, flexWrap: 'wrap' } },
+            React.createElement('span', { style: S.cardsLabel }, 'nudge'),
+            grp('board', 'bdx', 'bdy'), grp('hero', 'hdx', 'hdy'),
+            React.createElement('span', { style: { color: '#666', fontSize: 11 } },
+              `board(${nudge.bdx},${nudge.bdy}) hero(${nudge.hdx},${nudge.hdy})`));
+        })(),
         // CALIBRATION OVERLAY: the whole table with the region boxes drawn on it.
         // board (green) should sit on the board cards' top-left corners; hero (red)
         // on the hole cards; band (blue) on the nameplate. Off = box misplaced.
