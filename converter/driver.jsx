@@ -71,7 +71,7 @@ function readCardCell(matcher, cell) {
 }
 // change-detect key (ignores confidence jitter) + compact record for the log
 const cellRecKey = (r) => (r ? r.state + (r.code || '') : 'none');
-const cellRec = (r) => (r ? { state: r.state, code: r.code || null, conf: r.conf != null ? +r.conf.toFixed(3) : null } : { state: 'none' });
+const cellRec = (r) => (r ? { state: r.state, code: r.code || null, guess: r.guess || null, conf: r.conf != null ? +r.conf.toFixed(3) : null } : { state: 'none' });
 // PNG data-URL of a strip cell, so each record entry keeps the actual picture
 // the code was matched from (checkable later). Strips are small (≈55×130).
 function stripToDataURL(cell) {
@@ -103,7 +103,11 @@ function cardChip(r, key) {
   let title, titleColor, sub;
   if (r.state === 'read') { const f = fmtCardCode(r.code); title = f.text; titleColor = f.red ? '#ff6b6b' : '#e8e8e8'; sub = pct; }
   else if (r.state === 'abstain') { const f = fmtCardCode(r.code); title = f.text + '?'; titleColor = '#e8c000'; sub = 'abstain ' + pct; }
-  else if (r.state === 'no-read') { title = '—'; titleColor = '#666'; sub = 'no-read' + (pct ? ' ' + pct : ''); }
+  else if (r.state === 'no-read') {
+    // show the below-gate TOP GUESS (dim) so a near-miss reads vs true garbage
+    if (r.guess) { const f = fmtCardCode(r.guess); title = f.text + '?'; titleColor = f.red ? '#a55' : '#888'; sub = 'low ' + pct; }
+    else { title = '—'; titleColor = '#666'; sub = 'no-read' + (pct ? ' ' + pct : ''); }
+  }
   else { title = '·'; titleColor = '#444'; sub = ''; }
   return React.createElement('div', { key, style: base },
     React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: titleColor, lineHeight: '18px' } }, title),
