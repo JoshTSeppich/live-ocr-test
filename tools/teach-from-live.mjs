@@ -122,15 +122,17 @@ function cmd_extract(jsonPath, outDir) {
 function loadLiveTpl(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return {}; }
 }
-function nextKey(tpl, code) { let n = 0; while (tpl[`${code}#${n}`]) n++; return `${code}#${n}`; }
+// key = code#<regime><n> where regime is 'w' (white) or 'd' (dim/showdown). The
+// matcher strips everything from '#' to recover the code, so the regime marker is
+// transparent to match() — but lets coverage track the two render regimes apart.
+function nextKey(tpl, code, regime) { let n = 0; while (tpl[`${code}#${regime}${n}`]) n++; return `${code}#${regime}${n}`; }
 
 function cmd_teach(jsonPath, labelsPath, tplFile) {
   tplFile = tplFile || path.join(ROOT, 'multi-sig-templates.live.json');
   const entries = loadEntries(jsonPath);
   const labels = JSON.parse(fs.readFileSync(labelsPath, 'utf8'));
   const tpl = loadLiveTpl(tplFile);
-  const cm = new E.MultiSignatureMatcher('teach-scratch'); // scratch; we hash directly
-  let taughtB = 0, taughtH = 0, skipped = [];
+  let taughtW = 0, taughtD = 0, skipped = [];
   for (const [idxStr, lab] of Object.entries(labels)) {
     const idx = +idxStr, e = entries[idx]; if (!e) continue;
     const sl = sliceEntry(e);
@@ -142,35 +144,45 @@ function cmd_teach(jsonPath, labelsPath, tplFile) {
       codes.forEach((code, i) => {
         if (!ALL_CODES.includes(code)) { skipped.push(`idx ${idx} ${grp} #${i}: bad code "${code}" — SKIP`); return; }
         const s = strips[i];
+        const regime = s.dim ? 'd' : 'w'; // detector-tagged render regime (showdown-dim vs white)
         const sig = { brightness: Array.from(E.hashCardRGBA(s.rgba, s.w, s.h)), edge: Array.from(E.hashCardEdge(s.rgba, s.w, s.h)), color: Array.from(E.hashCardColor(s.rgba, s.w, s.h)) };
-        tpl[nextKey(tpl, code)] = sig;
-        if (grp === 'board') taughtB++; else taughtH++;
+        tpl[nextKey(tpl, code, regime)] = sig;
+        if (regime === 'd') taughtD++; else taughtW++;
       });
     }
   }
   fs.writeFileSync(tplFile, JSON.stringify(tpl));
-  console.log(`taught ${taughtB} board + ${taughtH} hero live instances → ${tplFile}`);
+  console.log(`taught ${taughtW} white + ${taughtD} dim live instances → ${tplFile}`);
   if (skipped.length) { console.log('SKIPPED:'); skipped.forEach((s) => console.log('  ' + s)); }
   reportCoverage(tpl);
 }
 
-function reportCoverage(tpl) {
-  const perCode = {}; for (const c of ALL_CODES) perCode[c] = 0;
-  for (const k of Object.keys(tpl)) { const code = k.split('#')[0]; if (code in perCode) perCode[code]++; }
-  // rank×colour (the functional unit: rank from code, red/black from colour hash)
+// Coverage is tracked PER REGIME (white vs dim): a dim 9♦ and a white 9♦ are
+// different render targets and each regime needs its own instances. Report both so
+// you know when each is solid (the dim regime fills only from showdown frames).
+function regimeCoverage(tpl, regime) {
   const rc = {}; for (const r of RANKS) for (const col of ['red', 'black']) rc[r + ':' + col] = 0;
-  for (const c of ALL_CODES) rc[c[0] + ':' + colorOf(c)] += perCode[c];
-  const rcCovered = Object.values(rc).filter((n) => n > 0).length;
-  const rcMulti = Object.values(rc).filter((n) => n >= 3).length;
-  const codesCovered = ALL_CODES.filter((c) => perCode[c] > 0).length;
-  console.log('\n── COVERAGE ──');
-  console.log(`rank×colour (functional, 26): ${rcCovered}/26 with ≥1,  ${rcMulti}/26 with ≥3 (multi-instance target)`);
-  console.log(`codes (52): ${codesCovered}/52 with ≥1 live instance`);
-  const missRC = Object.entries(rc).filter(([, n]) => n === 0).map(([k]) => k);
-  const thinRC = Object.entries(rc).filter(([, n]) => n > 0 && n < 3).map(([k, n]) => `${k}(${n})`);
-  if (missRC.length) console.log(`MISSING rank×colour: ${missRC.join(', ')}`);
-  if (thinRC.length) console.log(`THIN (<3) rank×colour: ${thinRC.join(', ')}`);
-  if (!missRC.length && !thinRC.length) console.log('all 26 rank×colours have ≥3 live instances ✓');
+  for (const k of Object.keys(tpl)) {
+    const code = k.split('#')[0], suf = k.split('#')[1] || '';
+    if (suf[0] !== regime) continue;
+    if (ALL_CODES.includes(code)) rc[code[0] + ':' + colorOf(code)]++;
+  }
+  return rc;
+}
+function reportRegime(label, rc) {
+  const covered = Object.values(rc).filter((n) => n > 0).length;
+  const multi = Object.values(rc).filter((n) => n >= 3).length;
+  const miss = Object.entries(rc).filter(([, n]) => n === 0).map(([k]) => k);
+  const thin = Object.entries(rc).filter(([, n]) => n > 0 && n < 3).map(([k, n]) => `${k}(${n})`);
+  console.log(`\n  ${label} rank×colour (of 26): ${covered}/26 ≥1,  ${multi}/26 ≥3 (target)`);
+  if (miss.length) console.log(`    MISSING: ${miss.join(', ')}`);
+  if (thin.length) console.log(`    THIN (<3): ${thin.join(', ')}`);
+  if (!miss.length && !thin.length) console.log('    all 26 rank×colours ≥3 ✓');
+}
+function reportCoverage(tpl) {
+  console.log('\n── COVERAGE (white and dim tracked separately — both regimes need teaching) ──');
+  reportRegime('WHITE', regimeCoverage(tpl, 'w'));
+  reportRegime('DIM (showdown)', regimeCoverage(tpl, 'd'));
 }
 
 const [, , cmd, a, b, c] = process.argv;
