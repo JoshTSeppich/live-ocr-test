@@ -157,6 +157,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   // Hero-anchor diagnostics: did the band worker start, what did it OCR, did it match?
   const [heroDbg, setHeroDbg] = React.useState({ ready: false, ocr: '', matched: null });
   const heroDbgRef = React.useRef({ ready: false, ocr: '', matched: null });
+  // Calibration overlay: the whole frame with the region boxes drawn on it, so a
+  // box that's off the cards is visible at a glance (and measurable).
+  const frameSnapRef = React.useRef(null);   // getFrameSnapshot, set after useLiveOCR
+  const overlayCanvasRef = React.useRef(null);
   // Visible previews of the actual board/hero crops fed to the matcher (so a
   // misplaced region box is obvious — felt instead of cards).
   const boardCanvasRef = React.useRef(null);
@@ -262,6 +266,27 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         anchorStatusRef.current = placed.status;
         setAnchorStatus(placed.status);
       }
+
+      // ── Calibration overlay: draw the whole frame + the placed region boxes,
+      // so a box sitting off the cards is obvious (and the offset is measurable).
+      try {
+        const snap = frameSnapRef.current && frameSnapRef.current(480);
+        const cv = overlayCanvasRef.current;
+        if (snap && cv) {
+          if (cv.width !== snap.w || cv.height !== snap.h) { cv.width = snap.w; cv.height = snap.h; }
+          const ctx = cv.getContext('2d');
+          const data = snap.imageData instanceof Uint8ClampedArray ? snap.imageData : new Uint8ClampedArray(snap.imageData);
+          ctx.putImageData(new ImageData(data, snap.w, snap.h), 0, 0);
+          const colors = { board: '#3df0a0', hero_hole: '#ff6b6b', hero_band: '#55aaff' };
+          ctx.lineWidth = 1.5; ctx.font = '9px monospace';
+          for (const r of placed.regions.concat(heroBandRegion)) {
+            const c = colors[r.id]; if (!c) continue;
+            const x = r.x * snap.w, y = r.y * snap.h, w = r.w * snap.w, h = r.h * snap.h;
+            ctx.strokeStyle = c; ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = c; ctx.fillText(r.id, x + 1, Math.max(8, y - 1));
+          }
+        }
+      } catch (_) { /* overlay must never break capture */ }
     }
 
     // feed the latest action-panel OCR text (from Tesseract path) for check-vs-call
@@ -319,7 +344,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     setView({ state: conv.view.state, advisorEvent, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning });
   }, [heroBandRegion]);
 
-  const { status, start, stop, regionText, videoSize } = useLiveOCR({
+  const { status, start, stop, regionText, videoSize, getFrameSnapshot } = useLiveOCR({
     intervalMs: 250,
     regions,                          // hero-anchored; updated each frame by onFrame
     preprocess: true,
@@ -327,6 +352,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     onFrame,
   });
   regionTextRef.current = regionText; // keep the ref fresh for onFrame's closure
+  frameSnapRef.current = getFrameSnapshot; // for the calibration overlay in onFrame
 
   // Hero-band worker TEARDOWN only (creation is lazy, in onFrame). When capture
   // isn't running, terminate the worker + reset the anchor cache so the next
@@ -426,7 +452,13 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           React.createElement('span', { style: S.cardsLabel }, 'crop'),
           React.createElement('div', null,
             React.createElement('canvas', { ref: boardCanvasRef, style: { display: 'block', border: '1px solid #2a2a2a', background: '#000' } }),
-            React.createElement('canvas', { ref: heroCanvasRef, style: { display: 'block', marginTop: 4, border: '1px solid #2a2a2a', background: '#000' } })))),
+            React.createElement('canvas', { ref: heroCanvasRef, style: { display: 'block', marginTop: 4, border: '1px solid #2a2a2a', background: '#000' } }))),
+        // CALIBRATION OVERLAY: the whole table with the region boxes drawn on it.
+        // board (green) should sit on the board cards' top-left corners; hero (red)
+        // on the hole cards; band (blue) on the nameplate. Off = box misplaced.
+        React.createElement('div', { style: { ...S.cardsRow, alignItems: 'flex-start' } },
+          React.createElement('span', { style: S.cardsLabel }, 'overlay'),
+          React.createElement('canvas', { ref: overlayCanvasRef, style: { display: 'block', border: '1px solid #2a2a2a', background: '#000', maxWidth: '100%' } }))),
       // the seat-order self-check warning (top live-validation item) — loud
       view.seatWarning && React.createElement('div', { style: S.seatwarn }, view.seatWarning),
       // hero-bet stack-delta vs bet-badge drift (to_call ground-truth check)

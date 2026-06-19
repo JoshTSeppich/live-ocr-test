@@ -725,8 +725,29 @@ function useLiveOCR({ intervalMs = 250, regions = [], onEvent,
     } catch (_) { return null; }
   }, []);
 
+  // Downscaled snapshot of the WHOLE video frame (for a calibration overlay that
+  // draws region boxes on the live table). maxW caps width; returns {imageData,w,h}.
+  const frameSnapCanvasRef = React.useRef(null);
+  const getFrameSnapshot = React.useCallback((maxW = 480) => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) return null;
+    const scale = Math.min(1, maxW / v.videoWidth);
+    const w = Math.max(1, Math.round(v.videoWidth * scale));
+    const h = Math.max(1, Math.round(v.videoHeight * scale));
+    try {
+      if (!frameSnapCanvasRef.current) frameSnapCanvasRef.current = new OffscreenCanvas(w, h);
+      const c = frameSnapCanvasRef.current;
+      if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(v, 0, 0, v.videoWidth, v.videoHeight, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      return { imageData: img.data, w, h, vw: v.videoWidth, vh: v.videoHeight };
+    } catch (_) { return null; }
+  }, []);
+
   return { status, error, latency, regionText, regionLatency, videoSize, stream,
-           lastSkipped, fastPathHits, start, stop, getRegionPixels, getRegionOcrPixels };
+           lastSkipped, fastPathHits, start, stop, getRegionPixels, getRegionOcrPixels,
+           getFrameSnapshot };
 }
 
 window.useLiveOCR = useLiveOCR;
