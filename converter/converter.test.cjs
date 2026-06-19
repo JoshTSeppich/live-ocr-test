@@ -47,9 +47,12 @@ function strip(value) { // binarized strip of `value` chars with light gaps
 const CODE_INDEX = { '8h': 0, 'Jd': 1, '2d': 2, 'As': 3, 'Kd': 4 };
 const SLOT = Reg.BOARD_BOX.w / Reg.BOARD_CELLS; // 167 — one card slot
 const CARD_TOP = 24, CARD_BODY_H = 130;          // white body offset/height (felt above)
+const CARD_W = 130;                              // white body width < SLOT → a felt GAP
+                                                 // between cards (real cards are spaced;
+                                                 // the sequential detector splits on the gap)
 // paint a white card with its code-unique corner mark at column x0 on felt crop c
 function paintCard(c, x0, code) {
-  rect(c, x0, CARD_TOP, Math.min(SLOT, c.w - x0), Math.min(CARD_BODY_H, c.h - CARD_TOP), WHITE);
+  rect(c, x0, CARD_TOP, Math.min(CARD_W, c.w - x0), Math.min(CARD_BODY_H, c.h - CARD_TOP), WHITE);
   const i = CODE_INDEX[code], sx = x0 + 6, t = CARD_TOP;
   if (i === 0) rect(c, sx, t + 12, 44, 22, DARK);
   else if (i === 1) rect(c, sx, t + 54, 44, 22, DARK);

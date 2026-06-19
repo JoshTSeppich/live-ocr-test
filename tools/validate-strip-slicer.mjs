@@ -98,18 +98,17 @@ for (const fr of board.boards) {
   const bb = R.BOARD_BOX;
   const crop = cropRegion(png, bb.x, bb.y, bb.w, bb.h);
   const cells = F.sliceCells(crop, R.BOARD_CELLS, { layout: 'board' });
-  const truthBySlot = {};
-  for (const c of fr.cards) {
-    const k = Math.round((c.bbox[0] - FIRST_SLOT_X) / PITCH);
-    if (k >= 0 && k < R.BOARD_CELLS) truthBySlot[k] = c;
+  // sequential detector: cells (present, x-order) vs truth cards (x-order)
+  const detected = cells.filter((c) => c && c.present);
+  const truth = [...fr.cards].sort((a, b) => a.bbox[0] - b.bbox[0]);
+  const m = Math.max(detected.length, truth.length);
+  for (let i = 0; i < m; i++) {
+    const cell = detected[i], t = truth[i];
+    if (cell && t) { presence.TP++; run('board', fr.frame, board.capture_dir, [cell], [norm(t.card)], [t.bbox], tb); }
+    else if (cell && !t) { presence.FP++; if (presence.fp.length < 12) presence.fp.push(fr.frame + ' #' + i); }
+    else if (!cell && t) { presence.FN++; if (presence.fn.length < 12) presence.fn.push(fr.frame + ' #' + i + ' ' + t.card); }
   }
-  for (let i = 0; i < R.BOARD_CELLS; i++) {
-    const cell = cells[i], present = !!(cell && cell.present), truth = truthBySlot[i];
-    if (present && truth) { presence.TP++; run('board', fr.frame, board.capture_dir, [cell], [norm(truth.card)], [truth.bbox], tb); }
-    else if (present && !truth) { presence.FP++; if (presence.fp.length < 12) presence.fp.push(fr.frame + ' slot' + i); }
-    else if (!present && truth) { presence.FN++; if (presence.fn.length < 12) presence.fn.push(fr.frame + ' slot' + i + ' ' + truth.card); }
-    else presence.TN++;
-  }
+  presence.TN += R.BOARD_CELLS - Math.max(detected.length, truth.length); // trailing empty slots correctly absent
 }
 // ── HERO: crop HERO_HOLE_BOX, slice 2 (overlap), match rear+front ──
 const th = tally();

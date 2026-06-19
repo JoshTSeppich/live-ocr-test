@@ -97,9 +97,26 @@
       const lrow = Math.min(crop.h - 1, y + border);
       let left = xL;
       for (let x = xL; x < xR; x++) { if (_lum(crop.rgba, crop.w, x, lrow) > 150) { left = x; break; } }
-      return { left, top: y };
+      // right = end of the card-width top run (its right edge), for advancing the
+      // sequential board scan past this card to find the next one.
+      return { left, top: y, right: rL + r.len };
     }
     return null;
+  }
+  // Scan a region left→right and detect up to `max` card corners SEQUENTIALLY,
+  // advancing past each found card. Self-corrects card COUNT and PITCH — the live
+  // board centres/spreads cards by count, so a fixed even-cell grid misaligns; this
+  // finds the cards wherever they actually sit.
+  function _detectBoardCards(crop, sw, sh, max) {
+    const found = [];
+    let x = 0;
+    while (x < crop.w - Math.round(sw * 0.5) && found.length < max) {
+      const c = _detectCardCorner(crop, x, crop.w, sw, sh);
+      if (!c) break;
+      found.push(c);
+      x = Math.max(c.left + sw, c.right) + 2; // past this card, then look for the next
+    }
+    return found;
   }
 
   const _lum = (rgba, w, x, y) => { const i = (y * w + x) * 4; return (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3; };
@@ -188,20 +205,18 @@
       return [rear, front];
     }
 
-    // Board: one cell per slot, but DETECT each card's true top-left corner within
-    // the cell rather than trusting cell-left. At off-reference scales the anchor is
-    // off in BOTH axes — y (lands low) and x (the live card pitch differs from the
-    // anchored cell width, so cell-left drifts off the card and the rank slides out
-    // of the strip). The corner detector finds the felt→white card edge in x and y;
-    // is_present gates open slots (no card found).
-    const cellW = crop.w / n;
+    // Board: DETECT the cards by scanning the whole region left→right, rather than
+    // trusting a fixed even-cell grid. The anchor is off in both axes at off-
+    // reference scales, AND the live table centres/spreads the board by card count
+    // (flop/turn/river), so the real pitch ≠ the anchored cell width — a fixed grid
+    // straddles card edges and the rank slides out of the strip. Sequential corner
+    // detection lands on each card wherever it sits; trailing slots → absent.
+    const found = _detectBoardCards(crop, sw, sh, n);
     const cells = [];
     for (let i = 0; i < n; i++) {
-      const cellL = Math.round(i * cellW), cellR = Math.round((i + 1) * cellW);
-      const c = _detectCardCorner(crop, cellL, cellR, sw, sh);
-      cells.push(c
-        ? Object.assign(_cropStrip(crop, c.left, c.top, sw, sh), { present: true })
-        : absent(cellL));
+      cells.push(found[i]
+        ? Object.assign(_cropStrip(crop, found[i].left, found[i].top, sw, sh), { present: true })
+        : absent(Math.round(i * crop.w / n)));
     }
     return cells;
   }
