@@ -47,21 +47,59 @@
   const CARD_TOP_BORDER_FRAC = 0.07;  // TUNABLE clutter-rejector: solid-white top-border run, as a fraction of strip height
                                       // (~9px at native 130). Longer = stricter (rejects more clutter, risks thin cards).
   const CARD_TOP_FELT_GAP = 3;        // rows above the candidate top that must read felt (the sharp card edge)
+  // a card is a TALL bright body (rank ink only dips it); clutter (badges/text/
+  // chips in the extended search window) is short → reject it by the body check.
+  const CARD_BODY_FRAC = 0.70;        // how far below the top to verify (fraction of strip height) — a card is TALL
+  const CARD_BODY_FRAC_BRIGHT = 0.40; // a "still on the card" row: ≥40% of the run cols bright (rank-ink dip tolerated)
+  const CARD_BODY_MIN = 0.80;         // ≥80% of those rows must be card-bright (short banners/badges fail)
 
-  // Detect a card's TOP row within cols [xL,xR) of `crop`: the first felt→solid-
-  // white card edge with a sustained white top-border. Returns the row, or -1 if
-  // no card signature is found (felt / clutter only) → is_present = false.
-  function _detectCardTop(crop, xL, xR, sh) {
+  // Longest run of consecutive bright (lum>150) columns at row y within [xL,xR).
+  // The card's white top border is a long run; a chip/glyph/text is a short one.
+  function _brightRun(crop, xL, xR, y) {
+    let run = 0, runStart = -1, bestLen = 0, bestStart = -1;
+    for (let x = xL; x < xR; x++) {
+      if (_lum(crop.rgba, crop.w, x, y) > 150) { if (run === 0) runStart = x; run++; if (run > bestLen) { bestLen = run; bestStart = runStart; } }
+      else run = 0;
+    }
+    return { start: bestStart, len: bestLen };
+  }
+  // Detect a card's TOP-LEFT CORNER within cols [xL,xR) of `crop`: the first row
+  // with a CARD-WIDTH white run (top border), felt just above, the run SUSTAINED
+  // for the border depth. The run's start = the white-body LEFT edge (calibration
+  // anchor); the row = the white TOP. Returns {left,top} or null if no card
+  // signature (felt/clutter only) → is_present=false. Self-corrects BOTH axes: the
+  // anchor can be off in x (live card pitch/width drift) as well as y.
+  function _detectCardCorner(crop, xL, xR, sw, sh) {
     xR = Math.min(xR, crop.w);
     const border = Math.max(2, Math.round(CARD_TOP_BORDER_FRAC * sh));
+    const minRun = Math.max(3, Math.round(sw * 0.8)); // a card top spans ≥ a strip width; a chip/glyph does not
+    const bodyRows = Math.max(border + 1, Math.round(sh * CARD_BODY_FRAC)); // a card is TALL; clutter is short
     for (let y = 1; y < crop.h - border; y++) {
-      if (_rowBright(crop, xL, xR, y) < CARD_TOP_WHITE_FRAC) continue;                 // not solid white
-      if (_rowBright(crop, xL, xR, Math.max(0, y - CARD_TOP_FELT_GAP)) > CARD_TOP_DARK_FRAC) continue; // no felt above → mid-card/chip
-      let solid = true;                                                               // sustained white border?
-      for (let k = 0; k < border; k++) if (_rowBright(crop, xL, xR, y + k) < CARD_TOP_WHITE_FRAC) { solid = false; break; }
-      if (solid) return y;
+      const r = _brightRun(crop, xL, xR, y);
+      if (r.len < minRun) continue;                                                   // no card-width white run
+      const rL = r.start, rR = rL + minRun;
+      if (_rowBright(crop, rL, rR, Math.max(0, y - CARD_TOP_FELT_GAP)) > CARD_TOP_DARK_FRAC) continue; // no felt above → mid-card/chip
+      let solid = true;                                                               // sustained white border under the run?
+      for (let k = 0; k < border; k++) if (_rowBright(crop, rL, rR, y + k) < CARD_TOP_WHITE_FRAC) { solid = false; break; }
+      if (!solid) continue;
+      // CARD-BODY check: a card stays mostly bright for ~its height below the top
+      // (rank ink only dips it); short clutter (badges/text/chips) hits felt fast.
+      // Measure over the FULL card-width run (mostly white) — NOT the left strip
+      // band, which holds the rank glyph and would penalise ink-heavy ranks (5,10…).
+      const bR = Math.min(rL + r.len, xR);
+      let body = 0, rows = 0;
+      for (let k = 0; k < bodyRows && y + k < crop.h; k++) { rows++; if (_rowBright(crop, rL, bR, y + k) > CARD_BODY_FRAC_BRIGHT) body++; }
+      if (!rows || body / rows < CARD_BODY_MIN) continue;
+      // LEFT = the white-body edge measured a few rows BELOW the top, past the
+      // rounded top-left corner (where the edge is straight). The top row's bright
+      // run can start a few px in (the corner), which would shift the strip; the
+      // straight-edge row gives the true body-left (== calibration anchor).
+      const lrow = Math.min(crop.h - 1, y + border);
+      let left = xL;
+      for (let x = xL; x < xR; x++) { if (_lum(crop.rgba, crop.w, x, lrow) > 150) { left = x; break; } }
+      return { left, top: y };
     }
-    return -1;
+    return null;
   }
 
   const _lum = (rgba, w, x, y) => { const i = (y * w + x) * 4; return (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3; };
@@ -131,37 +169,39 @@
     const sw = Math.max(1, Math.round(STRIP_W_NATIVE * f));
     const sh = Math.max(1, Math.round(STRIP_H_NATIVE * f));
 
+    const absent = (x) => Object.assign(_cropStrip(crop, x, 0, sw, sh), { present: false });
+
     if (layout === 'hero') {
-      // Overlapped pair. rear exposed at the region's left corner; front begins one
-      // exposed-width (== strip width, measured front_x−rear_x==55) to its right.
-      // Detect each card's TOP (felt→white) so it lands on the rank corner, not the
-      // nameplate below; is_present gates a missing/occluded card → no classify.
-      const rl = _whiteLeft(crop, 0, crop.w);
-      const fl = rl + sw;
-      const mk = (x) => {
-        const top = _detectCardTop(crop, x, x + sw, sh);
-        return top >= 0
-          ? Object.assign(_cropStrip(crop, x, top, sw, sh), { present: true })
-          : Object.assign(_cropStrip(crop, x, 0, sw, sh), { present: false });
-      };
-      return [mk(rl), mk(fl)];
+      // Overlapped pair. Detect the rear card's exposed TOP-LEFT corner anywhere in
+      // the region; the front begins one exposed-width (== strip width, measured
+      // front_x−rear_x==55) to its right — detect the front's own corner there too.
+      // The corner detector lands on the rank corner (not the nameplate below) and
+      // self-corrects x/y; is_present gates a missing/occluded card → no classify.
+      const rc = _detectCardCorner(crop, 0, crop.w, sw, sh);
+      if (!rc) return [absent(0), absent(sw)];
+      const fl = rc.left + sw;
+      const fc = _detectCardCorner(crop, fl, crop.w, sw, sh);
+      const rear = Object.assign(_cropStrip(crop, rc.left, rc.top, sw, sh), { present: true });
+      const front = fc
+        ? Object.assign(_cropStrip(crop, fc.left, fc.top, sw, sh), { present: true })
+        : absent(fl);
+      return [rear, front];
     }
 
-    // Board cards sit at FIXED, evenly-pitched slots (residual ≤1px from a uniform
-    // grid), so the slot left = cell left = the card's body-left (calibration
-    // anchor). The VERTICAL is the problem: the anchor lands low at off-reference
-    // scales, so we DETECT each card's true top (felt→white edge) within the cell
-    // and crop the strip from there. is_present gates open slots (no card found).
+    // Board: one cell per slot, but DETECT each card's true top-left corner within
+    // the cell rather than trusting cell-left. At off-reference scales the anchor is
+    // off in BOTH axes — y (lands low) and x (the live card pitch differs from the
+    // anchored cell width, so cell-left drifts off the card and the rank slides out
+    // of the strip). The corner detector finds the felt→white card edge in x and y;
+    // is_present gates open slots (no card found).
     const cellW = crop.w / n;
     const cells = [];
     for (let i = 0; i < n; i++) {
-      const cellL = Math.round(i * cellW);
-      const top = _detectCardTop(crop, cellL, cellL + sw, sh);
-      if (top < 0) {                                   // no card signature → absent slot
-        cells.push(Object.assign(_cropStrip(crop, cellL, 0, sw, sh), { present: false }));
-      } else {
-        cells.push(Object.assign(_cropStrip(crop, cellL, top, sw, sh), { present: true }));
-      }
+      const cellL = Math.round(i * cellW), cellR = Math.round((i + 1) * cellW);
+      const c = _detectCardCorner(crop, cellL, cellR, sw, sh);
+      cells.push(c
+        ? Object.assign(_cropStrip(crop, c.left, c.top, sw, sh), { present: true })
+        : absent(cellL));
     }
     return cells;
   }

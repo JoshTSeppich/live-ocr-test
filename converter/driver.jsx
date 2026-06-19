@@ -347,8 +347,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           log.push({ t: Date.now(), anchor: anchorStatusRef.current, video: (vw && vh) ? [vw, vh] : null,
             heroDetect: { ...heroDbgRef.current },
             board: boardReads.map((r, i) => cellRecImg(r, bCells && bCells[i])),
-            hero: heroReads.map((r, i) => cellRecImg(r, hCells && hCells[i])) });
-          if (log.length > 1000) log.shift(); // crop images are heavy — cap memory
+            hero: heroReads.map((r, i) => cellRecImg(r, hCells && hCells[i])),
+            // full region crops so the slicer can be re-run offline on the real frame
+            boardRegion: stripToDataURL(bc && bc.color), heroRegion: stripToDataURL(hc && hc.color) });
+          if (log.length > 250) log.shift();  // full-region crops are heavy — cap memory
           persistReads(log);                  // survive reloads (capped tail)
           setRecordCount(log.length);
         }
