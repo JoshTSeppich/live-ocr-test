@@ -122,6 +122,43 @@ function cardChip(r, key) {
     React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: titleColor, lineHeight: '18px' } }, title),
     React.createElement('div', { style: { fontSize: 10, color: '#888' } }, sub));
 }
+// LOW-FID live table viewer (Josh's College Bot). Renders converter view.table —
+// the held display over the settled observation; '?' for unread, never withheld.
+function TableViewPanel(props) {
+  const t = props.table;
+  if (!t) return null;
+  const h = React.createElement;
+  const slot = (code, key) => {
+    const q = !code || code === '?';
+    const f = q ? null : fmtCardCode(code);
+    return h('div', { key, style: { minWidth: 24, padding: '3px 5px', textAlign: 'center', border: '1px solid #2a2a2a', borderRadius: 4, background: '#161616', color: q ? '#555' : (f.red ? '#ff6b6b' : '#e8e8e8'), font: '700 14px ui-monospace,monospace' } }, q ? '?' : f.text);
+  };
+  const seat = (sid) => {
+    const s = t.seats[sid] || {};
+    const hero = sid === 'BC', btn = t.button === sid;
+    const occl = s.stackStatus === 'occluded';
+    const stackTxt = s.stack != null ? (+s.stack).toFixed(1) + 'bb' : (occl ? 'occl' : '?');
+    const betTxt = (s.bet != null && s.bet > 0) ? (+s.bet).toFixed(1) + 'bb' : '';
+    return h('div', { key: sid, style: { width: 96, padding: 4, border: '1px solid ' + (hero ? '#3a5' : '#2a2a2a'), borderRadius: 5, background: (hero && t.heroToAct) ? '#16301a' : '#141414', textAlign: 'center' } },
+      h('div', { style: { fontSize: 10, color: hero ? '#6c9' : '#888' } }, sid + (btn ? ' Ⓓ' : '') + (hero ? ' (you)' : '')),
+      h('div', { style: { fontSize: 13, color: occl ? '#c90' : '#ddd' } }, stackTxt),
+      betTxt ? h('div', { style: { fontSize: 11, color: '#e8c000' } }, 'bet ' + betTxt) : null);
+  };
+  const row = (ids) => h('div', { style: { display: 'flex', gap: 6, justifyContent: 'center' } }, ids.map(seat));
+  return h('div', { style: { marginTop: 8, padding: 10, border: '1px solid #243524', borderRadius: 6, background: '#0c0f0c' } },
+    h('div', { style: { display: 'flex', justifyContent: 'space-between', color: '#8a8', fontSize: 12, marginBottom: 8 } },
+      h('span', null, "Josh's College Bot — live table"),
+      h('span', null, 'hand #' + t.hand + ' · ' + (t.street || '?') + (t.heroToAct ? ' · YOUR TURN' : ''))),
+    row(['TL', 'TC', 'TR']),
+    h('div', { style: { display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', margin: '10px 0' } },
+      h('span', { style: { color: '#888', fontSize: 11, marginRight: 4 } }, 'board'),
+      t.board.map((c, i) => slot(c, 'bd' + i)),
+      h('span', { style: { color: '#8c8', fontSize: 12, marginLeft: 12 } }, 'pot ' + (t.pot != null ? (+t.pot).toFixed(1) + 'bb' : '?'))),
+    row(['BL', 'BC', 'BR']),
+    h('div', { style: { display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', marginTop: 8 } },
+      h('span', { style: { color: '#888', fontSize: 11, marginRight: 4 } }, 'your hand'),
+      t.hero.map((c, i) => slot(c, 'hh' + i))));
+}
 // Draw a {rgba,w,h} crop into a visible <canvas>, scaled to maxW. This shows the
 // EXACT pixels the card matcher is fed — so you can see whether the region box is
 // on the cards (anchored correctly) or sitting in the felt (misplaced).
@@ -381,7 +418,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       // host (advisor-mount.jsx) subscribes to, so the human sees LIVE advice.
       if (advisorEvent) AdvisorEvent.sharedBus().publish(advisorEvent);
     } catch (e) { advisorEvent = null; } // never let a display map crash capture
-    setView({ state: conv.view.state, advisorEvent, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning });
+    setView({ state: conv.view.state, advisorEvent, seatWarning: conv.view.seatWarning, betWarning: conv.view.betWarning, callWarning: conv.view.callWarning, table: conv.view.table });
   }, [heroBandRegion]);
 
   const { status, start, stop, regionText, videoSize, getFrameSnapshot } = useLiveOCR({
@@ -473,6 +510,8 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       // the advice — the whole point — rendered by the shared contract panel
       React.createElement('div', { style: S.advisorHost },
         React.createElement(AdvisorPanel, { event: view.advisorEvent, muted: false, onToggleMute: () => {} })),
+      // LOW-FID live table viewer (Josh's College Bot) — what the table reads now
+      React.createElement(TableViewPanel, { table: view.table }),
       // live card-readout (read-only): what the card pipeline matches each frame
       React.createElement('div', { style: S.cards },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, color: '#aaa', fontSize: 12 } },

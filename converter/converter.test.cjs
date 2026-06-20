@@ -121,6 +121,22 @@ const FULL_PANEL = 'Fold  Call 5.60  Raise 11.20'; // a facing-bet (CALL) spot
 const CHECK_PANEL = 'Fold  Check  Raise 2.00';      // a check spot (to_call==0)
 const FASTFOLD_PANEL = 'Fold  Call Any  Raise Any';
 
+test('low-fid viewer: onFrame populates view.table (held display, never withheld)', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText(CHECK_PANEL);
+  const g = scene(baseScene); // board 8h Jd 2d, hole As Kd, pot 5
+  cv.onFrame(g, { videoW: 2940, videoH: 1846 });
+  cv.onFrame(g, { videoW: 2940, videoH: 1846 }); // settle
+  const t = cv.view.table;
+  assert.ok(t, 'view.table populated');
+  assert.deepStrictEqual(t.board.slice(0, 3), ['8h', 'Jd', '2d'], 'read board held');
+  assert.deepStrictEqual(t.board.slice(3), ['?', '?'], 'undealt slots → ?');
+  assert.deepStrictEqual(t.hero, ['As', 'Kd'], 'hero hole read');
+  assert.ok(t.seats.BC && t.seats.BC.stack != null, 'hero stack present');
+  assert.strictEqual(t.street, 'flop');
+  assert.ok(cv.view.snapshot && Array.isArray(cv.view.snapshot.board), 'raw thin snapshot exposed');
+});
+
 test('settles then sends one assembled request on hero turn', () => {
   const { cv, sent } = makeConverter();
   cv.setPanelText(FULL_PANEL);

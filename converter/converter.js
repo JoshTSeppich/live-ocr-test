@@ -24,11 +24,13 @@
   const Frame = (typeof require === 'function') ? require('./frame.js') : (root && root.PokerFrame);
   const Assembler = (typeof require === 'function') ? require('./assembler.js') : (root && root.PokerAssembler);
   const Seats = (typeof require === 'function') ? require('./seats.js') : (root && root.PokerSeats);
+  const TableView = (typeof require === 'function') ? require('./tableView.js') : (root && root.PokerTableView);
 
   function streetFromCount(n) {
     if (n === 0) return 0; if (n === 3) return 1; if (n === 4) return 2; if (n === 5) return 3;
     return null; // 1,2 = mid-deal/invalid
   }
+  const STREET_NAME = ['preflop', 'flop', 'turn', 'river'];
 
   class Converter {
     constructor(deps) {
@@ -54,7 +56,10 @@
       this._sentSig = null;                // E: signature of the last-sent snapshot
       this._prevHist = null;               // {bets,stacks} chips for Layer-4 deltas
       this._panelText = null;              // latest action-panel OCR text (check-vs-call)
-      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, callWarning: null, withheld: null, actionSet: null, stale: false, declined: null };
+      this.view = { state: 'idle', advice: null, warning: null, seatWarning: null, betWarning: null, callWarning: null, withheld: null, actionSet: null, stale: false, declined: null, table: null, snapshot: null };
+      // Low-fid VIEWER (Josh's College Bot) — a display over the settled observation,
+      // decoupled from the assembler's brain-gate. Never withholds; '?' for unread.
+      this.tableView = (TableView && TableView.TableView) ? new TableView.TableView() : null;
 
       if (this.botLink) {
         // a parsed advice clears any standing brain-decline for this turn
@@ -148,6 +153,21 @@
       // / absent panels are benign (not hero's turn) and stay idle.
       const panelUnreadable = redTurn && actionSet === 'unparseable';
       this.view.actionSet = redTurn ? actionSet : null;
+
+      // ── LOW-FID VIEWER (Josh's College Bot) — a display over the SETTLED
+      // observation, NOT the assembler's gated request. It never withholds: shows
+      // what reads, '?' for what it can't (hero-shy, button/Gate-D, occluded). Held
+      // state (last-good per slot, hard reset on the §0.7 hand boundary) is separate
+      // from the advice path entirely.
+      if (this.tableView) {
+        const thin = TableView.thinFromConfirmed(confirmed, {
+          heroToAct,
+          street: this._street != null ? STREET_NAME[this._street] : null,
+          heroBet: this._heroBetBB,
+        });
+        this.view.snapshot = thin;                              // raw per-frame thin block
+        this.view.table = this.tableView.update(thin, bres.boundary); // held display
+      }
 
       // §3a: the rendered panel is AUTHORITATIVE for legal actions; our arithmetic
       // is a sanity cross-check. On a panel↔arithmetic disagreement (the check-vs-

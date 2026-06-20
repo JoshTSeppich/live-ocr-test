@@ -21,6 +21,7 @@ import '../converter/history.js';
 import '../converter/assembler.js';
 import '../converter/botLink.js';
 import '../converter/escalate.js';
+import '../converter/tableView.js'; // low-fid viewer state — required by converter.js
 import '../converter/converter.js';
 import '../converter/captureHarness.js';
 import '../converter/driver.jsx';   // → window.ConverterPanel
