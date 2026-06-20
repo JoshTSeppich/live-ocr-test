@@ -608,6 +608,20 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     try { localStorage.removeItem(BADGE_KEY); } catch (_) {}
     setBadgeCount(0);
   }, []);
+  // QoL: ONE download pairing the thin stream + the badge crops from the same
+  // capture — so a failed numeric parse (thin) can be cross-checked against the
+  // actual crop (badges). The fat card-reads JSON stays separate.
+  const downloadCapture = React.useCallback(() => {
+    try {
+      const payload = { capturedAt: new Date().toISOString(), thin: thinLogRef.current, badges: badgeLogRef.current };
+      const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'capture-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 0);
+    } catch (e) { console.warn('[capture] download failed:', e); }
+  }, []);
 
   // ── display (inline styles — self-contained, no build wiring) ──────────────
   // The advice/escalate readout is now the shared <AdvisorPanel> (the contract
@@ -654,7 +668,8 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           React.createElement('button', { onClick: clearThin, disabled: thinCount === 0, style: { fontSize: 11 } }, 'Clear thin'),
           React.createElement('span', { style: { color: '#666', marginLeft: 10 } }, `badges: ${badgeCount}`),
           React.createElement('button', { onClick: downloadBadges, disabled: badgeCount === 0, style: { fontSize: 11 } }, 'Download badges'),
-          React.createElement('button', { onClick: clearBadges, disabled: badgeCount === 0, style: { fontSize: 11 } }, 'Clear badges')),
+          React.createElement('button', { onClick: clearBadges, disabled: badgeCount === 0, style: { fontSize: 11 } }, 'Clear badges'),
+          React.createElement('button', { onClick: downloadCapture, disabled: thinCount === 0 && badgeCount === 0, style: { fontSize: 11, marginLeft: 10, fontWeight: 700 } }, 'Download capture (thin+badges)')),
         React.createElement('div', { style: S.cardsRow },
           React.createElement('span', { style: S.cardsLabel }, 'board'),
           ...cardReads.board.map((r, i) => cardChip(r, 'b' + i))),
