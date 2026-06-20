@@ -26,6 +26,7 @@ import * as Tesseract from 'tesseract.js';
 import PokerEngine from '../engine.js';
 import CaptureQueue from '../capture-queue.js';
 import stripTemplates from '../multi-sig-templates.strip.json';
+import liveTemplates from '../multi-sig-templates.live.json';
 
 window.React = React;
 window.ReactDOM = ReactDOMClient; // exposes createRoot (the only API the app uses)
@@ -43,23 +44,24 @@ window.CaptureQueue = CaptureQueue;
 // validated 698/698 by tools/validate-suit-corpus.mjs).
 //
 // Seeded here, before live-ocr-test.jsx / driver.jsx construct their matchers.
-// Idempotent: a version marker means we replace stale full-cell templates ONCE
-// (the first load after this ships) and then leave localStorage alone, so a
-// later re-teach is not clobbered on every reload. Bump SEED_VERSION to force
-// a re-seed if the strip set itself changes.
+// Idempotent: a version marker means we replace the set ONCE per version and then
+// leave localStorage alone. Bump SEED_VERSION to force a re-seed when the set changes.
 //
-// NOTE: this seeds the READING templates only. The live card-READ crop path
-// (cardCellsFromRegion / sliceCells) still slices full-height cells and does
-// NOT yet produce the calibrated 55×130 strip — that slicer is the deferred
-// follow-up. Until it lands, these strip templates are correct but the live
-// crop fed to them is not; the corpus harness is the meaningful gate.
+// We seed the corpus strip set MERGED WITH the LIVE re-taught instances
+// (multi-sig-templates.live.json, keyed code#<regime><n>; match() strips at '#').
+// The corpus alone mis-COLOURS/-RANKS the live client's render (overfit to one
+// capture); the live instances — strip-verified, colour-gate-clean — are what make
+// the live table READ correctly instead of all-'?'. Best-of-instances means a live
+// card matches its own live template; cards with no live instance fall back to the
+// corpus. Dim instances are harmless here (the read-path dim→abstain guard keeps
+// dim cards from reading confident, regardless of which template they match).
 try {
   const KEY = 'multi-sig-templates';
   const MARK = 'multi-sig-templates:seed-version';
-  const SEED_VERSION = 'strip-v1';
+  const SEED_VERSION = 'strip+live-v1'; // bump → re-seed (replaces the corpus-only set)
   if (typeof localStorage !== 'undefined'
       && localStorage.getItem(MARK) !== SEED_VERSION) {
-    localStorage.setItem(KEY, JSON.stringify(stripTemplates));
+    localStorage.setItem(KEY, JSON.stringify(Object.assign({}, stripTemplates, liveTemplates)));
     localStorage.setItem(MARK, SEED_VERSION);
   }
 } catch (_) { /* private mode / quota — matcher falls back to whatever's there */ }
