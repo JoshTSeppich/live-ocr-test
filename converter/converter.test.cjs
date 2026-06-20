@@ -137,6 +137,30 @@ test('low-fid viewer: onFrame populates view.table (held display, never withheld
   assert.ok(cv.view.snapshot && Array.isArray(cv.view.snapshot.board), 'raw thin snapshot exposed');
 });
 
+test('thin snapshot: view.block = full table state, codes-or-null, NO crops', () => {
+  const { cv } = makeConverter();
+  cv.setPanelText(CHECK_PANEL);
+  const g = scene(baseScene); // board 8h Jd 2d, hole As Kd, pot 5, betTR 3
+  cv.onFrame(g, { videoW: 2940, videoH: 1846 });
+  cv.onFrame(g, { videoW: 2940, videoH: 1846 }); // settle
+  const b = cv.view.block;
+  assert.ok(b, 'view.block present');
+  assert.deepStrictEqual(b.board[0], { code: '8h', state: 'read', conf: b.board[0].conf }, 'board cell tagged');
+  assert.strictEqual(b.board.length, 3);
+  assert.strictEqual(b.hero.length, 2);
+  assert.strictEqual(b.pot, 5);
+  assert.strictEqual(b.street, 'flop');
+  assert.deepStrictEqual(b.video, [2940, 1846]);
+  assert.strictEqual(b.seats.length, 6);
+  const bc = b.seats.find((s) => s.id === 'BC');
+  assert.ok(bc && bc.stack != null && bc.state === 'active', 'hero seat active w/ stack');
+  const tr = b.seats.find((s) => s.id === 'TR');
+  assert.strictEqual(tr.bet, 3, 'villain bet read');
+  assert.ok('button' in b && 'toAct' in b && 'heroTurn' in b && 'timer' in b);
+  assert.ok(!JSON.stringify(b).includes('data:image'), 'NO base64 crops in thin block');
+  console.log('\nTHIN BLOCK PROOF:\n' + JSON.stringify(b, null, 1) + '\n');
+});
+
 test('settles then sends one assembled request on hero turn', () => {
   const { cv, sent } = makeConverter();
   cv.setPanelText(FULL_PANEL);

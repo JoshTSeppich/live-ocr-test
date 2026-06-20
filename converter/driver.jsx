@@ -103,6 +103,14 @@ function persistReads(log) {
     catch (_) { if (n <= 0) { try { localStorage.removeItem(READS_KEY); } catch (__) {} return; } }
   }
 }
+// THIN full-state snapshot log — small (no base64 crops), so the cap is generous.
+const THIN_KEY = 'thin-snapshot-log';
+function persistThin(log) {
+  for (let n = Math.min(log.length, 3000); ; n = Math.floor(n / 2)) {
+    try { localStorage.setItem(THIN_KEY, JSON.stringify(log.slice(-n))); return; }
+    catch (_) { if (n <= 0) { try { localStorage.removeItem(THIN_KEY); } catch (__) {} return; } }
+  }
+}
 // One card chip element for the live readout (read-only).
 function cardChip(r, key) {
   r = r || { state: 'none' };
@@ -235,6 +243,9 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   const cardLogRef = React.useRef([]);
   const lastLogKeyRef = React.useRef('');
   const [recordCount, setRecordCount] = React.useState(0);
+  // thin full-state snapshot ring (one block per frame; codes-or-'?', no crops)
+  const thinLogRef = React.useRef([]);
+  const [thinCount, setThinCount] = React.useState(0);
 
   // Build the pipeline once.
   if (!convRef.current) {
@@ -368,6 +379,19 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     conv.setPanelText(regionTextRef.current && regionTextRef.current.action_panel || null);
     const res = conv.onFrame(getCrops, dims); // res.request = the assembled snapshot
 
+    // ── THIN full-state snapshot log: append one block per frame (codes-or-'?',
+    // seat/stack/bet/pot/turn/button-or-null) for the board / state-machine /
+    // narration. Additive tap on the converter's view.block — NOT the brain request.
+    try {
+      if (conv.view.block) {
+        const tlog = thinLogRef.current;
+        tlog.push(Object.assign({ t: Date.now() }, conv.view.block));
+        if (tlog.length > 5000) tlog.shift();
+        persistThin(tlog);
+        setThinCount(tlog.length);
+      }
+    } catch (e) { /* a log tap must never break capture */ }
+
     // ── Live card-readout (read-only): classify each board/hero strip exactly as
     // the pipeline does — same cropper, same matcher, same 0.85 gate — so the
     // panel shows what the card pipeline matches this frame.
@@ -479,6 +503,26 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     setRecordCount(0);
   }, []);
 
+  // Restore + download/clear the THIN snapshot log (parallel to the fat card log).
+  React.useEffect(() => {
+    try { const raw = localStorage.getItem(THIN_KEY); if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) { thinLogRef.current = arr; setThinCount(arr.length); } } } catch (_) {}
+  }, []);
+  const downloadThin = React.useCallback(() => {
+    try {
+      const blob = new Blob([JSON.stringify(thinLogRef.current, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'thin-snapshot-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 0);
+    } catch (e) { console.warn('[thin-snapshot] download failed:', e); }
+  }, []);
+  const clearThin = React.useCallback(() => {
+    thinLogRef.current = [];
+    try { localStorage.removeItem(THIN_KEY); } catch (_) {}
+    setThinCount(0);
+  }, []);
+
   // ── display (inline styles — self-contained, no build wiring) ──────────────
   // The advice/escalate readout is now the shared <AdvisorPanel> (the contract
   // display, items 1–9), fed by the live converter→AdvisorEvent adapter above.
@@ -518,7 +562,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           React.createElement('span', null, 'card readout (live)'),
           React.createElement('span', { style: { color: '#666' } }, `rec: ${recordCount}`),
           React.createElement('button', { onClick: downloadReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Download JSON'),
-          React.createElement('button', { onClick: clearReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Clear')),
+          React.createElement('button', { onClick: clearReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Clear'),
+          React.createElement('span', { style: { color: '#666', marginLeft: 10 } }, `thin: ${thinCount}`),
+          React.createElement('button', { onClick: downloadThin, disabled: thinCount === 0, style: { fontSize: 11 } }, 'Download thin'),
+          React.createElement('button', { onClick: clearThin, disabled: thinCount === 0, style: { fontSize: 11 } }, 'Clear thin')),
         React.createElement('div', { style: S.cardsRow },
           React.createElement('span', { style: S.cardsLabel }, 'board'),
           ...cardReads.board.map((r, i) => cardChip(r, 'b' + i))),

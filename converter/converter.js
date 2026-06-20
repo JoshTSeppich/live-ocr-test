@@ -168,6 +168,15 @@
         this.view.snapshot = thin;                              // raw per-frame thin block
         this.view.table = this.tableView.update(thin, bres.boundary); // held display
       }
+      // RICH thin full-state block for the append-only snapshot log (board /
+      // state-machine / narration foundation). Tap on `confirmed` — additive, the
+      // brain-request path above is untouched.
+      this.view.block = TableView.blockFromConfirmed(confirmed, {
+        heroToAct,
+        street: this._street != null ? STREET_NAME[this._street] : null,
+        heroBet: this._heroBetBB,
+        video: (dims && dims.videoW) ? [dims.videoW, dims.videoH] : null,
+      });
 
       // §3a: the rendered panel is AUTHORITATIVE for legal actions; our arithmetic
       // is a sanity cross-check. On a panel↔arithmetic disagreement (the check-vs-

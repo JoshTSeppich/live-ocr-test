@@ -67,6 +67,57 @@
     };
   }
 
+  // RICH thin full-state block (one per settled frame) — the append-only log the
+  // board / state-machine / narration consumes. Every field is "what was read this
+  // frame", TAGGED: unread → null / state:'no-read'|'absent' / 'occluded', NEVER
+  // guessed. NO base64 crops (that's the fat card log). Copies the converter's
+  // already-settled reads (`confirmed`) + already-computed bits (`extra`) — no
+  // re-OCR, no recompute, and entirely decoupled from the assembler's brain-gate.
+  function blockFromConfirmed(confirmed, extra) {
+    confirmed = confirmed || {};
+    extra = extra || {};
+    const cardCell = (c) => ({
+      code: (c && c.status === 'read' && c.code) ? c.code : null,
+      state: c ? c.status : 'none',
+      conf: (c && c.confidence != null) ? +Number(c.confidence).toFixed(3) : null,
+    });
+    const cards = (f) => (f && f.value)
+      ? f.value.filter((c) => c && c.status !== 'absent' && c.status !== 'none').map(cardCell)
+      : [];
+    const seatBlock = (seat) => {
+      const st = confirmed.stacks ? confirmed.stacks[seat] : null;
+      const isHero = seat === HERO_SEAT;
+      const bt = isHero ? null : (confirmed.bets ? confirmed.bets[seat] : null);
+      let state = 'unknown', stack = null;
+      if (st && st.status === 'read') { state = 'active'; stack = st.value; }
+      else if (st && st.status === 'occluded') { state = 'occluded'; stack = 'occluded'; }
+      else if (st && st.status === 'no-read' && st.stable) { state = 'empty'; }
+      // folded/allin are NOT derivable from the stack read alone → left 'unknown'.
+      return {
+        id: seat,
+        name: null, // no name-OCR wired yet → null (never fabricated)
+        stack,
+        bet: isHero
+          ? (extra.heroBet != null ? extra.heroBet : null)
+          : ((bt && bt.status === 'read') ? bt.value : null),
+        state,
+      };
+    };
+    return {
+      video: extra.video || null,
+      street: extra.street != null ? extra.street : null,
+      board: cards(confirmed.board),
+      hero: cards(confirmed.heroHole),
+      pot: (confirmed.pot && confirmed.pot.status === 'read') ? confirmed.pot.value : null,
+      seats: SEATS.map(seatBlock),
+      button: (confirmed.button && confirmed.button.status === 'read') ? confirmed.button.seat : null,
+      toAct: extra.heroToAct ? HERO_SEAT : null, // villain to-act not derivable outside the assembler → null
+      heroTurn: !!extra.heroToAct,
+      timer: (confirmed.timer && confirmed.timer.status !== 'no-read' && confirmed.timer.fraction != null)
+        ? +Number(confirmed.timer.fraction).toFixed(3) : null,
+    };
+  }
+
   // Holds the display state across frames. Feed update(thin, boundary) each frame.
   class TableView {
     constructor() { this.handCount = 0; this.reset(); }
@@ -118,5 +169,5 @@
     }
   }
 
-  return { SEATS, HERO_SEAT, cardCodes, thinFromConfirmed, TableView };
+  return { SEATS, HERO_SEAT, cardCodes, thinFromConfirmed, blockFromConfirmed, TableView };
 });
