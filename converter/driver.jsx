@@ -94,6 +94,44 @@ function stripToDataURL(cell) {
 }
 // one card record = code/conf/state + the crop image
 const cellRecImg = (r, cell) => Object.assign(cellRec(r), { img: stripToDataURL(cell) });
+
+// DIAGNOSTIC: crop a MARGIN-EXPANDED window around each anchored numeric region
+// (stack/bet/pot) from a full-res frame snapshot, so the live number geometry can
+// be re-measured + gold-filtered OFFLINE. The plates render WHITE name on top /
+// GOLD number below, and the current boxes sit on the name — so we expand
+// generously DOWNWARD to capture the gold number even when the box clips it. Each
+// entry records `box` (the anchored region rect WITHIN the crop) so the box-vs-
+// number offset is measurable. JPEG to keep the diagnostic log small.
+function captureNumericCrops(getSnap, regions, fullW) {
+  if (!getSnap || !regions) return null;
+  const snap = getSnap(fullW || 2940); // full-res frame
+  if (!snap || !snap.imageData) return null;
+  const src = snap.imageData instanceof Uint8ClampedArray ? snap.imageData : new Uint8ClampedArray(snap.imageData);
+  const out = {};
+  for (const r of regions) {
+    if (!(r.kind === 'stack' || r.kind === 'bet' || r.kind === 'pot')) continue;
+    const bx = r.x * snap.w, by = r.y * snap.h, bw = r.w * snap.w, bh = r.h * snap.h;
+    const mx = bw * 0.30, mTop = bh * 0.40, mBot = bh * 1.30; // gold number sits below the box
+    const x0 = Math.max(0, Math.floor(bx - mx)), y0 = Math.max(0, Math.floor(by - mTop));
+    const x1 = Math.min(snap.w, Math.ceil(bx + bw + mx)), y1 = Math.min(snap.h, Math.ceil(by + bh + mBot));
+    const w = x1 - x0, h = y1 - y0;
+    if (w <= 0 || h <= 0) continue;
+    try {
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d');
+      const img = ctx.createImageData(w, h);
+      for (let yy = 0; yy < h; yy++) {
+        for (let xx = 0; xx < w; xx++) {
+          const si = ((y0 + yy) * snap.w + (x0 + xx)) * 4, di = (yy * w + xx) * 4;
+          img.data[di] = src[si]; img.data[di + 1] = src[si + 1]; img.data[di + 2] = src[si + 2]; img.data[di + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      out[r.id] = { url: cv.toDataURL('image/jpeg', 0.85), box: { x: Math.round(bx - x0), y: Math.round(by - y0), w: Math.round(bw), h: Math.round(bh) }, w, h };
+    } catch (_) { /* skip this region */ }
+  }
+  return Object.keys(out).length ? out : null;
+}
 // Persist a capped tail to localStorage; crop images are heavy, so shrink the
 // stored window on a quota error rather than failing.
 const READS_KEY = 'card-reads-log';
@@ -109,6 +147,15 @@ function persistThin(log) {
   for (let n = Math.min(log.length, 3000); ; n = Math.floor(n / 2)) {
     try { localStorage.setItem(THIN_KEY, JSON.stringify(log.slice(-n))); return; }
     catch (_) { if (n <= 0) { try { localStorage.removeItem(THIN_KEY); } catch (__) {} return; } }
+  }
+}
+// BADGE-CROP diagnostic log — margin-expanded numeric-region crops (heavy JPEGs),
+// for offline geometry re-measure + gold-filter + digit teach. Small reload tail.
+const BADGE_KEY = 'badge-crops-log';
+function persistBadges(log) {
+  for (let n = Math.min(log.length, 12); ; n = Math.floor(n / 2)) {
+    try { localStorage.setItem(BADGE_KEY, JSON.stringify(log.slice(-n))); return; }
+    catch (_) { if (n <= 0) { try { localStorage.removeItem(BADGE_KEY); } catch (__) {} return; } }
   }
 }
 // One card chip element for the live readout (read-only).
@@ -246,6 +293,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
   // thin full-state snapshot ring (one block per frame; codes-or-'?', no crops)
   const thinLogRef = React.useRef([]);
   const [thinCount, setThinCount] = React.useState(0);
+  // badge-crop diagnostic ring (margin-expanded numeric crops for digit-teach prep)
+  const placedRef = React.useRef(null);            // this frame's anchored regions
+  const badgeLogRef = React.useRef([]);
+  const [badgeCount, setBadgeCount] = React.useState(0);
 
   // Build the pipeline once.
   if (!convRef.current) {
@@ -348,6 +399,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
         r.id === 'board' ? shift(r, nf.bdx, nf.bdy)
         : r.id === 'hero_hole' ? shift(r, nf.hdx, nf.hdy) : r);
       setRegions(adj.concat(heroBandRegion));
+      placedRef.current = adj; // anchored regions this frame → badge-crop diagnostic
       if (placed.status !== anchorStatusRef.current) {
         anchorStatusRef.current = placed.status;
         setAnchorStatus(placed.status);
@@ -423,6 +475,20 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           if (log.length > 250) log.shift();  // full-region crops are heavy — cap memory
           persistReads(log);                  // survive reloads (capped tail)
           setRecordCount(log.length);
+
+          // DIAGNOSTIC: on the same card-change trigger (mid-hand → badges populated),
+          // capture margin-expanded numeric crops for the digit-teach prep. Separate
+          // heavy ring so the card log stays usable; capped tight.
+          try {
+            const numeric = captureNumericCrops(frameSnapRef.current, placedRef.current, vw);
+            if (numeric) {
+              const blog = badgeLogRef.current;
+              blog.push({ t: Date.now(), video: (vw && vh) ? [vw, vh] : null, anchor: anchorStatusRef.current, numeric });
+              if (blog.length > 60) blog.shift();
+              persistBadges(blog);
+              setBadgeCount(blog.length);
+            }
+          } catch (e) { /* badge diagnostic must never break capture */ }
         }
       }
     } catch (e) { /* a debug panel must never break capture */ }
@@ -523,6 +589,26 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
     setThinCount(0);
   }, []);
 
+  // Restore + download/clear the BADGE-CROP diagnostic log (digit-teach prep).
+  React.useEffect(() => {
+    try { const raw = localStorage.getItem(BADGE_KEY); if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) { badgeLogRef.current = arr; setBadgeCount(arr.length); } } } catch (_) {}
+  }, []);
+  const downloadBadges = React.useCallback(() => {
+    try {
+      const blob = new Blob([JSON.stringify(badgeLogRef.current, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'badge-crops-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 0);
+    } catch (e) { console.warn('[badge-crops] download failed:', e); }
+  }, []);
+  const clearBadges = React.useCallback(() => {
+    badgeLogRef.current = [];
+    try { localStorage.removeItem(BADGE_KEY); } catch (_) {}
+    setBadgeCount(0);
+  }, []);
+
   // ── display (inline styles — self-contained, no build wiring) ──────────────
   // The advice/escalate readout is now the shared <AdvisorPanel> (the contract
   // display, items 1–9), fed by the live converter→AdvisorEvent adapter above.
@@ -565,7 +651,10 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
           React.createElement('button', { onClick: clearReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Clear'),
           React.createElement('span', { style: { color: '#666', marginLeft: 10 } }, `thin: ${thinCount}`),
           React.createElement('button', { onClick: downloadThin, disabled: thinCount === 0, style: { fontSize: 11 } }, 'Download thin'),
-          React.createElement('button', { onClick: clearThin, disabled: thinCount === 0, style: { fontSize: 11 } }, 'Clear thin')),
+          React.createElement('button', { onClick: clearThin, disabled: thinCount === 0, style: { fontSize: 11 } }, 'Clear thin'),
+          React.createElement('span', { style: { color: '#666', marginLeft: 10 } }, `badges: ${badgeCount}`),
+          React.createElement('button', { onClick: downloadBadges, disabled: badgeCount === 0, style: { fontSize: 11 } }, 'Download badges'),
+          React.createElement('button', { onClick: clearBadges, disabled: badgeCount === 0, style: { fontSize: 11 } }, 'Clear badges')),
         React.createElement('div', { style: S.cardsRow },
           React.createElement('span', { style: S.cardsLabel }, 'board'),
           ...cardReads.board.map((r, i) => cardChip(r, 'b' + i))),
