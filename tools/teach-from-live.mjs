@@ -119,8 +119,68 @@ function cmd_extract(jsonPath, outDir) {
   tiles.forEach((t) => console.log(`  idx ${t.idx}: board ${t.nb} card(s), hero ${t.nh} card(s)`));
 }
 
+// STRIP montage — the per-card strips the matcher actually hashes, upscaled and
+// stacked with the entry index + a red 'D' on dim strips. STANDING RULE: verify
+// labels from THIS (ground truth), not the contact-sheet region crop — the region
+// is only human-readable; a chip/abutment can make a strip grab the wrong card or
+// mis-read a colour, which only the strip reveals. Also splits into <2000px chunks.
+function cmd_strips(jsonPath, outDir) {
+  outDir = outDir || '/tmp/teach-live';
+  fs.mkdirSync(outDir, { recursive: true });
+  const entries = loadEntries(jsonPath);
+  const ents = [];
+  entries.forEach((e, i) => { const sl = sliceEntry(e); if (sl.board.length) ents.push({ i, c: sl.board }); });
+  if (!ents.length) { console.log('no board strips found.'); return; }
+  const SC = 3, sw = 46, sh = 110, gap = 6, lblW = 34, rowH = sh * SC + 8;
+  const W = lblW + 5 * (sw * SC + gap), H = ents.length * rowH;
+  const out = new PNG({ width: W, height: H }); out.data.fill(45);
+  ents.forEach((e, r) => {
+    const oy = r * rowH + 2;
+    drawText(out, e.i, 2, oy + 10, 4, [255, 230, 0]);
+    e.c.forEach((s, k) => {
+      const ox = lblW + k * (sw * SC + gap);
+      const tile = { rgba: s.rgba, w: s.w, h: s.h };
+      blit(out, tile, ox, oy, SC);
+      if (s.dim) for (let yy = 0; yy < 12; yy++) for (let xx = 0; xx < 12; xx++) { const di = ((oy + yy) * W + (ox + xx)) * 4; out.data[di] = 255; out.data[di + 1] = 40; out.data[di + 2] = 40; out.data[di + 3] = 255; } // red corner = dim
+    });
+  });
+  const big = path.join(outDir, 'strips.png');
+  fs.writeFileSync(big, PNG.sync.write(out));
+  const CH = 1900, n = Math.ceil(H / CH);
+  for (let i = 0; i < n; i++) {
+    const y0 = i * CH, hh = Math.min(CH, H - y0); const d = new PNG({ width: W, height: hh });
+    for (let y = 0; y < hh; y++) for (let x = 0; x < W; x++) { const si = ((y0 + y) * W + x) * 4, di = (y * W + x) * 4; d.data[di] = out.data[si]; d.data[di + 1] = out.data[si + 1]; d.data[di + 2] = out.data[si + 2]; d.data[di + 3] = 255; }
+    fs.writeFileSync(path.join(outDir, `strips${i}.png`), PNG.sync.write(d));
+  }
+  console.log(`strip montage: ${big}  (${ents.length} board entries, ${n} chunks strips0..${n - 1}.png)`);
+  console.log(`  entries: ${ents.map((e) => e.i + '(' + e.c.length + (e.c.some((s) => s.dim) ? 'D' : '') + ')').join(' ')}`);
+}
+
 function loadLiveTpl(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return {}; }
+}
+
+// COLOR-CONSISTENCY check — the one error that defeats never-confidently-wrong from
+// inside the templates: a red strip stored under a black code ('Xc'/'Xs') or vice
+// versa. The colour hash is per-cell red-dominant; red cards read ≈0.2-0.34, black
+// ≈0.00 (threshold derived from the correctly-labelled corpus). Flags any mismatch.
+function cmd_check(tplFile) {
+  tplFile = tplFile || path.join(ROOT, 'multi-sig-templates.live.json');
+  const redFrac = (arr) => { let n = 0; for (const b of arr) if (b) n++; return arr.length ? n / arr.length : 0; };
+  const corpus = JSON.parse(fs.readFileSync(path.join(ROOT, 'multi-sig-templates.strip.json'), 'utf8'));
+  let bMax = 0, rMin = 1;
+  for (const [code, sig] of Object.entries(corpus)) { const rf = redFrac(sig.color); if (colorOf(code) === 'red') rMin = Math.min(rMin, rf); else bMax = Math.max(bMax, rf); }
+  const TH = (bMax + rMin) / 2;
+  const live = loadLiveTpl(tplFile);
+  const bad = [];
+  for (const [key, sig] of Object.entries(live)) {
+    const code = key.split('#')[0], exp = colorOf(code), got = redFrac(sig.color) >= TH ? 'red' : 'black';
+    if (got !== exp) bad.push(`${key}: code=${exp} but colour-hash reads ${got} (redFrac ${redFrac(sig.color).toFixed(3)})`);
+  }
+  console.log(`colour-consistency (threshold ${TH.toFixed(3)}): ${Object.keys(live).length} live templates, ${bad.length} POISONED`);
+  bad.forEach((b) => console.log('  ✗ ' + b));
+  if (!bad.length) console.log('  ✓ every template’s colour hash matches its code colour');
+  if (bad.length) process.exit(1);
 }
 // key = code#<regime><n> where regime is 'w' (white) or 'd' (dim/showdown). The
 // matcher strips everything from '#' to recover the code, so the regime marker is
@@ -187,5 +247,7 @@ function reportCoverage(tpl) {
 
 const [, , cmd, a, b, c] = process.argv;
 if (cmd === 'extract' && a) cmd_extract(a, b);
+else if (cmd === 'strips' && a) cmd_strips(a, b);
+else if (cmd === 'check') cmd_check(a);
 else if (cmd === 'teach' && a && b) cmd_teach(a, b, c);
-else { console.log('usage:\n  teach-from-live.mjs extract <reads.json> [outDir]\n  teach-from-live.mjs teach <reads.json> <labels.json> [liveTplFile]'); process.exit(1); }
+else { console.log('usage:\n  teach-from-live.mjs extract <reads.json> [outDir]   (human-readable region contact sheet)\n  teach-from-live.mjs strips  <reads.json> [outDir]   (GROUND-TRUTH per-card strip montage — verify labels here)\n  teach-from-live.mjs teach   <reads.json> <labels.json> [liveTplFile]'); process.exit(1); }
