@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "esbuild": "0.28.0",
+    "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0"
   }
 }
