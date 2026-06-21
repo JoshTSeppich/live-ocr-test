@@ -35,7 +35,7 @@ function ConverterApp() {
   const tabBtn = (id, label) => React.createElement('button',
     { onClick: () => setTab(id), style: { fontWeight: tab === id ? 700 : 400, marginRight: 6 } }, label);
   return React.createElement('div',
-    { style: { position: 'fixed', right: 8, top: 8, width: 410, maxHeight: '92vh', overflow: 'auto', zIndex: 2147483000, border: '1px solid #333', borderRadius: 8, background: '#111' } },
+    { style: { position: 'fixed', right: 8, top: 8, width: 470, maxHeight: '92vh', overflow: 'auto', zIndex: 2147483000, border: '1px solid #333', borderRadius: 8, background: '#111' } },
     React.createElement('div', { style: { display: 'flex', padding: 8, borderBottom: '1px solid #333' } },
       tabBtn('advisor', 'Advisor'),
       tabBtn('harness', 'Capture Harness (§6)')),
