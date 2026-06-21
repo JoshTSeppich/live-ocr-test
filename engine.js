@@ -640,6 +640,31 @@ function hashDigitRGBA(rgba, w, h)  { return _gridBrightnessHash(rgba, w, h, DIG
 function hashDigitEdge(rgba, w, h)  { return _gridEdgeHash(rgba, w, h, DIGIT_W, DIGIT_H); }
 function hashDigitColor(rgba, w, h) { return _gridColorHash(rgba, w, h, DIGIT_W, DIGIT_H); }
 
+// ── correlation digit templates (Option 2) ────────────────────────────────
+// The 96-bit hash above couldn't separate 8/6/5/0/B at ~18×34px. The DigitMatcher
+// now stores a CDIGIT_W×CDIGIT_H binary grid of each glyph's TIGHT-INK region and
+// matches by COSINE — higher resolution, and match() returns a best-vs-2nd-best
+// MARGIN so a confusable glyph can be abstained (the read-side never-wrong bar).
+const CDIGIT_W = 20, CDIGIT_H = 32, CDIGIT_CELLS = CDIGIT_W * CDIGIT_H;
+function _digitGrid(rgba, w, h) {
+  // tight bbox of dark ink (binarized glyph: ink = max(rgb) < 128), then area-
+  // resample to the fixed grid (ink cell = majority-ink).
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; if (Math.max(rgba[i], rgba[i + 1], rgba[i + 2]) < 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
+  const g = new Uint8Array(CDIGIT_CELLS);
+  if (x1 < x0) return g; // no ink
+  const tw = x1 - x0 + 1, th = y1 - y0 + 1;
+  for (let gy = 0; gy < CDIGIT_H; gy++) for (let gx = 0; gx < CDIGIT_W; gx++) {
+    const ax0 = x0 + Math.floor(gx * tw / CDIGIT_W), ax1 = x0 + Math.max(Math.floor(gx * tw / CDIGIT_W) + 1, Math.floor((gx + 1) * tw / CDIGIT_W));
+    const ay0 = y0 + Math.floor(gy * th / CDIGIT_H), ay1 = y0 + Math.max(Math.floor(gy * th / CDIGIT_H) + 1, Math.floor((gy + 1) * th / CDIGIT_H));
+    let ink = 0, tot = 0;
+    for (let y = ay0; y < ay1; y++) for (let x = ax0; x < ax1; x++) { tot++; const i = (y * w + x) * 4; if (Math.max(rgba[i], rgba[i + 1], rgba[i + 2]) < 128) ink++; }
+    g[gy * CDIGIT_W + gx] = (ink * 2 >= tot) ? 1 : 0;
+  }
+  return g;
+}
+function _cosGrid(a, b) { let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i]; nb += b[i]; } return na && nb ? dot / Math.sqrt(na * nb) : 0; }
+
 // Copy a column band [x0, x1) (full height) of an RGBA buffer into a new,
 // tightly-packed RGBA buffer. Used to hand each segmented glyph to match().
 function _cropColumns(rgba, w, h, x0, x1) {
@@ -668,18 +693,8 @@ class DigitMatcher {
     try {
       const raw = localStorage.getItem(this.key);
       if (!raw) return;
-      const parsed = JSON.parse(raw);
-      const entries = parsed && parsed.symbols ? parsed.symbols : parsed;
-      for (const [k, v] of Object.entries(entries || {})) {
-        if (v && v.brightness && v.edge && v.color) {
-          this.templates.set(k, {
-            brightness: new Uint8Array(v.brightness),
-            edge: new Uint8Array(v.edge),
-            color: new Uint8Array(v.color),
-          });
-        }
-      }
-    } catch (_) {}
+      this.deserialize(raw);
+    } catch (_) { /* corrupt/legacy blob — start empty rather than crash */ }
   }
   _save() {
     if (typeof localStorage === 'undefined') return;
@@ -687,31 +702,22 @@ class DigitMatcher {
   }
   teach(symbol, rgba, w, h) {
     if (!symbol || !rgba) return false;
-    this.templates.set(symbol, {
-      brightness: hashDigitRGBA(rgba, w, h),
-      edge: hashDigitEdge(rgba, w, h),
-      color: hashDigitColor(rgba, w, h),
-    });
+    this.templates.set(symbol, _digitGrid(rgba, w, h)); // correlation grid
     this._save();
     return true;
   }
+  // Returns { symbol, confidence (cosine 0..1), margin (best − 2nd-best) } or null.
+  // The caller abstains on low confidence OR low margin — never-confidently-wrong.
   match(rgba, w, h) {
     if (this.templates.size === 0) return null;
-    const probe = {
-      brightness: hashDigitRGBA(rgba, w, h),
-      edge: hashDigitEdge(rgba, w, h),
-      color: hashDigitColor(rgba, w, h),
-    };
-    let best = null, bestDist = Infinity;
-    for (const [symbol, sig] of this.templates) {
-      const dB = hammingDistance(probe.brightness, sig.brightness);
-      const dC = hammingDistance(probe.color,      sig.color);
-      const dE = hammingDistance(probe.edge,       sig.edge);
-      const combined = 0.5 * dB + 0.3 * dC + 0.2 * dE;
-      if (combined < bestDist) { bestDist = combined; best = symbol; }
+    const probe = _digitGrid(rgba, w, h);
+    let b1 = -1, b2 = -1, sym = null;
+    for (const [symbol, grid] of this.templates) {
+      const sc = _cosGrid(probe, grid);
+      if (sc > b1) { b2 = b1; b1 = sc; sym = symbol; } else if (sc > b2) b2 = sc;
     }
-    return best == null ? null
-      : { symbol: best, distance: bestDist, confidence: 1 - bestDist / DIGIT_BITS };
+    return sym == null ? null
+      : { symbol: sym, confidence: b1, margin: b1 - (b2 < 0 ? 0 : b2), distance: 1 - b1 };
   }
   clear() { this.templates.clear(); this._save(); }
   forget(symbol) { this.templates.delete(symbol); this._save(); }
@@ -784,61 +790,29 @@ class DigitMatcher {
     return { text, confidence: minConf === Infinity ? 0 : minConf, unmatched, boxes };
   }
 
-  // schema v1: { schema_version, captured_at, grid:[w,h], bits, symbols }.
-  // symbols is keyed by symbol; each value has brightness/edge/color as plain
-  // number arrays of length DIGIT_BITS (96) containing only 0/1.
+  // schema v2 (correlation): { schema_version:2, kind:'correlation', grid:[w,h],
+  // digits:{ sym: number[w*h] of 0/1 } }. Accepts the tool's {digits} blob too.
   serialize() {
-    const symbols = {};
-    for (const [k, v] of this.templates) {
-      symbols[k] = {
-        brightness: Array.from(v.brightness),
-        edge: Array.from(v.edge),
-        color: Array.from(v.color),
-      };
-    }
-    return JSON.stringify({
-      schema_version: 1,
-      captured_at: new Date().toISOString(),
-      grid: [DIGIT_W, DIGIT_H],
-      bits: DIGIT_BITS,
-      template_count: this.templates.size,
-      symbols,
-    });
+    const digits = {};
+    for (const [k, g] of this.templates) digits[k] = Array.from(g);
+    return JSON.stringify({ schema_version: 2, kind: 'correlation', captured_at: new Date().toISOString(), grid: [CDIGIT_W, CDIGIT_H], template_count: this.templates.size, digits });
   }
-  // Replace this matcher's templates from a serialized blob (JSON string or the
-  // parsed object). Strict: throws on a bad schema, unknown symbol, wrong-length
-  // signature, or non-binary value — a corrupt blob is worse than an empty one.
+  // Replace templates from a serialized blob (JSON string or object). Strict:
+  // throws on bad schema / unknown symbol / wrong-length / non-binary — a corrupt
+  // blob is worse than an empty one. Accepts either {digits} (the teach tool) or
+  // {symbols} keyed by symbol → grid array.
   deserialize(payload) {
     const obj = typeof payload === 'string' ? JSON.parse(payload) : payload;
     if (!obj || typeof obj !== 'object') throw new Error('invalid digit template blob');
-    if (obj.schema_version !== 1) {
-      throw new Error('schema_version must be 1, got ' + obj.schema_version);
-    }
-    const symbols = obj.symbols;
-    if (!symbols || typeof symbols !== 'object') {
-      throw new Error('symbols field missing or not an object');
-    }
+    const entries = obj.digits || obj.symbols;
+    if (!entries || typeof entries !== 'object') throw new Error('digits field missing or not an object');
     const next = new Map();
-    for (const [sym, v] of Object.entries(symbols)) {
+    for (const [sym, arr] of Object.entries(entries)) {
       if (DIGIT_SYMBOLS.indexOf(sym) < 0) throw new Error('unknown digit symbol: ' + sym);
-      if (!v || typeof v !== 'object') throw new Error('invalid template at ' + sym + ': not an object');
-      for (const field of ['brightness', 'edge', 'color']) {
-        const arr = v[field];
-        if (!Array.isArray(arr)) throw new Error('invalid template at ' + sym + ': ' + field + ' not array');
-        if (arr.length !== DIGIT_BITS) {
-          throw new Error('invalid template at ' + sym + ': ' + field + ' length ' + arr.length + ' (expected ' + DIGIT_BITS + ')');
-        }
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i] !== 0 && arr[i] !== 1) {
-            throw new Error('invalid template at ' + sym + ': ' + field + '[' + i + '] = ' + arr[i] + ' (must be 0 or 1)');
-          }
-        }
-      }
-      next.set(sym, {
-        brightness: new Uint8Array(v.brightness),
-        edge: new Uint8Array(v.edge),
-        color: new Uint8Array(v.color),
-      });
+      if (!Array.isArray(arr)) throw new Error('invalid template at ' + sym + ': not an array');
+      if (arr.length !== CDIGIT_CELLS) throw new Error('invalid template at ' + sym + ': length ' + arr.length + ' (expected ' + CDIGIT_CELLS + ')');
+      for (let i = 0; i < arr.length; i++) if (arr[i] !== 0 && arr[i] !== 1) throw new Error('invalid template at ' + sym + ': [' + i + '] = ' + arr[i] + ' (must be 0 or 1)');
+      next.set(sym, new Uint8Array(arr));
     }
     this.templates = next;
     this._save();

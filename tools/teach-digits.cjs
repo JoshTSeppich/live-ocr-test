@@ -137,7 +137,7 @@ console.log('GATE: ' + (anyWrong ? 'FAIL' : 'PASS — every verified value CORRE
 
 if (WRITE && !anyWrong) {
   const out = { schema_version: 1, kind: 'correlation', grid: [GW, GH], cos_min: cm, margin: mg, digits: {} };
-  for (const s of DIG) out.digits[s] = Array.from(tpl[s]);
+  for (const s of TPL) out.digits[s] = Array.from(tpl[s]); // include 'B' — read strips trailing B (else "BB"→"88")
   fs.writeFileSync('digit-templates.live.json', JSON.stringify(out));
   console.log('WROTE digit-templates.live.json (correlation, ' + DIG.length + ' digits, cos_min=' + cm + ' margin=' + mg + ')');
 } else if (WRITE) console.log('NOT written — gate failed.');

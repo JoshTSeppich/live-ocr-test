@@ -61,17 +61,19 @@ function buildTaughtStrip(symbols) {
   const strip = makeCrop(W, H, [255, 255, 255]); // light background
   symbols.forEach((sym, g) => {
     const x0 = GAP + g * CELL;
+    if (sym === '.') { for (let y = H - 5; y < H - 1; y++) for (let x = 0; x < 4; x++) setPx(strip, x0 + 2 + x, y, [0, 0, 0]); return; } // SHORT baseline dot (geometry)
     const seed = sym.charCodeAt(0);
     for (let y = 0; y < H; y++)
       for (let x = 0; x < INNER; x++)
-        if (((x * 7 + y * 13 + seed) % 11) < 5) setPx(strip, x0 + x, y, [0, 0, 0]); // dark ink
+        if (((x * 7 + y * 13 + seed) % 11) < 5) setPx(strip, x0 + x, y, [0, 0, 0]); // tall dark ink
   });
   const dm = new Engine.DigitMatcher('test:strip');
   dm.clear();
   const boxes = dm.segment(strip.rgba, strip.w, strip.h);
   assert.strictEqual(boxes.length, symbols.length,
     `segmented ${boxes.length} glyphs, expected ${symbols.length}`);
-  boxes.forEach((b, i) => dm.teach(symbols[i], b.rgba, b.w, b.h));
+  // teach DIGITS only — '.' is detected by geometry in readNumericBadge, not taught
+  boxes.forEach((b, i) => { if (symbols[i] !== '.') dm.teach(symbols[i], b.rgba, b.w, b.h); });
   return { dm, strip };
 }
 
@@ -111,27 +113,26 @@ test('parseBB: variants', () => {
   assert.strictEqual(O.parseBB(null), null);
 });
 
-// ── readNumericBadge ─────────────────────────────────────────────────────────
-test('readNumericBadge: occluded color crop is withheld, matcher untouched', () => {
+// ── goldNumberStrip (occlusion now lives here) + readNumericBadge (strip→number) ──
+test('goldNumberStrip: no gold (green-occluded / empty) → null → no-read', () => {
   const { dm } = buildTaughtStrip(['5', '.', '4', '0']);
-  const color = makeCrop(60, 24, DARK); scatter(color, GREEN, 0.20);
-  const binar = makeCrop(60, 24, [255, 255, 255]); // irrelevant; gate stops first
-  const res = O.readNumericBadge(color, binar, dm);
-  assert.strictEqual(res.status, 'occluded');
+  const occluded = makeCrop(60, 24, DARK); scatter(occluded, GREEN, 0.20); // no gold number
+  const strip = O.goldNumberStrip(occluded);
+  assert.strictEqual(strip, null, 'no gold band → null');
+  const res = O.readNumericBadge(strip, dm);
+  assert.strictEqual(res.status, 'no-read'); // matcher untouched (read-only)
   assert.strictEqual(res.value, null);
 });
-test('readNumericBadge: clean plate reads the taught strip value', () => {
+test('readNumericBadge: a binarized strip reads the taught value (short dot ⇒ ".")', () => {
   const { dm, strip } = buildTaughtStrip(['5', '.', '4', '0']);
-  const color = makeCrop(60, 24, DARK); scatter(color, WHITE, 0.05);
-  const res = O.readNumericBadge(color, strip, dm);
+  const res = O.readNumericBadge(strip, dm);
   assert.strictEqual(res.status, 'read');
   assert.strictEqual(res.value, 5.4);
 });
-test('readNumericBadge: clean plate but no templates → no-read', () => {
+test('readNumericBadge: no templates → no-read', () => {
+  const { strip } = buildTaughtStrip(['5', '.', '4', '0']);
   const dm = new Engine.DigitMatcher('test:empty'); dm.clear();
-  const color = makeCrop(60, 24, DARK); scatter(color, WHITE, 0.05);
-  const binar = makeCrop(60, 24, [255, 255, 255]);
-  const res = O.readNumericBadge(color, binar, dm);
+  const res = O.readNumericBadge(strip, dm);
   assert.strictEqual(res.status, 'no-read');
 });
 
@@ -201,9 +202,16 @@ test('turnIndicator: no buttons → not hero turn', () => {
 });
 
 // ── observeFrame (assembler) ─────────────────────────────────────────────────
+// dark-ink strip → a GOLD-on-dark COLOR plate (live-like), digits densified 2× so
+// they clear goldNumberStrip's empty-seat peak guard. observeFrame gold-locates it.
+function goldColorOf(strip) {
+  const SC = 2, c = makeCrop(strip.w * SC + 40, strip.h * SC + 20, DARK);
+  for (let y = 0; y < strip.h; y++) for (let x = 0; x < strip.w; x++) if (strip.rgba[(y * strip.w + x) * 4] < 128) rect(c, x * SC + 20, y * SC + 10, SC, SC, YELLOW);
+  return c;
+}
 function fakeFrame(over) {
   const { dm, strip } = buildTaughtStrip(['5', '.', '4', '0']); // reads 5.4
-  const cleanColor = makeCrop(60, 24, DARK); scatter(cleanColor, WHITE, 0.05);
+  const gold = goldColorOf(strip);
   const base = {
     digitMatcher: dm,
     color: {}, binar: {},
@@ -211,12 +219,12 @@ function fakeFrame(over) {
     getColor(id) { return this.color[id] || null; },
     getBinarized(id) { return this.binar[id] || null; },
   };
-  // every stack + non-hero bet reads 5.4; pot too
+  // every stack + non-hero bet reads 5.4 (gold number); pot too
   for (const s of R.SEATS) {
-    base.color[`stack_${s}`] = cleanColor; base.binar[`stack_${s}`] = strip;
-    base.color[`bet_${s}`] = cleanColor; base.binar[`bet_${s}`] = strip;
+    base.color[`stack_${s}`] = gold;
+    base.color[`bet_${s}`] = gold;
   }
-  base.color['pot'] = cleanColor; base.binar['pot'] = strip;
+  base.color['pot'] = gold;
   // button: disc at the TR slot, in button_scan-local coords
   const btn = makeCrop(R.BUTTON_SCAN_RECT.w, R.BUTTON_SCAN_RECT.h, DARK);
   disc(btn, R.BUTTON_SLOTS.TR.x - R.BUTTON_SCAN_RECT.x, R.BUTTON_SLOTS.TR.y - R.BUTTON_SCAN_RECT.y, 16, YELLOW);
@@ -257,12 +265,13 @@ test('observeFrame: unknown hero action → BC bet withheld (no fabrication)', (
   assert.strictEqual(obs.bets.BC.value, null);
 });
 
-test('observeFrame: occluded stack tags occluded, others still read', () => {
+test('observeFrame: occluded/no-gold stack → no-read (never wrong), others still read', () => {
   const f = fakeFrame();
+  // a green badge over the plate hides the gold number → gold-locate finds nothing
   const occ = makeCrop(60, 24, DARK); scatter(occ, WHITE, 0.05); scatter(occ, GREEN, 0.20);
-  f.color['stack_TL'] = occ; // green badge over TL plate
+  f.color['stack_TL'] = occ;
   const obs = O.observeFrame(f);
-  assert.strictEqual(obs.stacks.TL.status, 'occluded');
+  assert.strictEqual(obs.stacks.TL.status, 'no-read'); // no gold ⇒ "?" at the seat, never a spurious number
   assert.strictEqual(obs.stacks.TL.value, null);
   assert.strictEqual(obs.stacks.TR.status, 'read'); // complementary plate fine
 });

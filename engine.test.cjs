@@ -582,9 +582,7 @@ ok('digit serialize/deserialize round-trips', (() => {
   for (const sym of ['1', '.', '$', 'B']) {
     const a = src.templates.get(sym), b = dst.templates.get(sym);
     if (!a || !b) { same = false; continue; }
-    if (!arraysEqual(a.brightness, b.brightness)) same = false;
-    if (!arraysEqual(a.edge,       b.edge))       same = false;
-    if (!arraysEqual(a.color,      b.color))      same = false;
+    if (!arraysEqual(a, b)) same = false; // correlation grid (Uint8Array)
   }
   src.clear(); dst.clear();
   return same;
@@ -605,11 +603,7 @@ ok('digit deserialize rejects unknown symbol', (() => {
 // deserialize rejects a wrong-length signature.
 ok('digit deserialize rejects wrong-length signature', (() => {
   const m = new E.DigitMatcher('test:digit-badlen');
-  const bad = {
-    schema_version: 1, grid: [8, 12], bits: 96, symbols: {
-      '4': { brightness: new Array(10).fill(0), edge: new Array(E.DIGIT_BITS).fill(0), color: new Array(E.DIGIT_BITS).fill(0) },
-    },
-  };
+  const bad = { schema_version: 2, kind: 'correlation', grid: [20, 32], digits: { '4': new Array(10).fill(0) } };
   try { m.deserialize(bad); return false; }
   catch (e) { m.clear(); return /length/.test(e.message); }
 })());

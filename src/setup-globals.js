@@ -27,6 +27,7 @@ import PokerEngine from '../engine.js';
 import CaptureQueue from '../capture-queue.js';
 import stripTemplates from '../multi-sig-templates.strip.json';
 import liveTemplates from '../multi-sig-templates.live.json';
+import digitTemplates from '../digit-templates.live.json';
 
 window.React = React;
 window.ReactDOM = ReactDOMClient; // exposes createRoot (the only API the app uses)
@@ -65,3 +66,18 @@ try {
     localStorage.setItem(MARK, SEED_VERSION);
   }
 } catch (_) { /* private mode / quota — matcher falls back to whatever's there */ }
+
+// ── Seed the correlation DIGIT templates (Option 2: stacks/bets/pot) ───────
+// The engine DigitMatcher loads localStorage['pp-digit-templates-v1'] (correlation
+// grid format) at construction. digit-templates.live.json passed the hard gate
+// (every operator-verified value reads CORRECT or ABSTAINS, never WRONG); bump
+// DIGIT_SEED_VERSION to re-seed when retaught.
+try {
+  const DKEY = 'pp-digit-templates-v1';
+  const DMARK = 'pp-digit-templates:seed-version';
+  const DIGIT_SEED_VERSION = 'correlation-v1';
+  if (typeof localStorage !== 'undefined' && localStorage.getItem(DMARK) !== DIGIT_SEED_VERSION) {
+    localStorage.setItem(DKEY, JSON.stringify(digitTemplates));
+    localStorage.setItem(DMARK, DIGIT_SEED_VERSION);
+  }
+} catch (_) { /* private mode / quota — digit matcher falls back to empty (all '?') */ }

@@ -102,27 +102,74 @@
     return Number.isFinite(v) ? v : null;
   }
 
+  // Gold number ink: stacks/bets/pot render GOLD; names render WHITE; blind chips
+  // GREEN. Separating the number from the name by COLOR (not position) is the key
+  // — and it makes the old occlusion gate moot: a green-overlaid plate yields no
+  // gold → null → '?', and the blind chip never reads as a stack.
+  function isGoldNum(rgba, i) { return (rgba[i] - rgba[i + 2]) > 45 && rgba[i] > 120 && rgba[i + 1] > 90; }
+
+  // GOLD-LOCATE (the live seam, called by observeFrame): from a WIDE color crop,
+  // find the gold text-line band and return a BINARIZED strip (gold→0/ink, else
+  // 255) of its full x-extent — or null when there's no gold number (empty/folded
+  // seat, or a non-gold overlay). null ⇒ the never-wrong '?' at the seat level.
+  function goldNumberStrip(colorPx, opts) {
+    if (!colorPx || !colorPx.rgba) return null;
+    const { rgba, w, h } = colorPx;
+    const minPeak = (opts && opts.goldMinPeak != null) ? opts.goldMinPeak : 6;
+    const rg = new Int32Array(h);
+    for (let y = 0; y < h; y++) { let c = 0; for (let x = 0; x < w; x++) if (isGoldNum(rgba, (y * w + x) * 4)) c++; rg[y] = c; }
+    let pk = 0; for (let y = 1; y < h; y++) if (rg[y] > rg[pk]) pk = y;
+    if (rg[pk] < minPeak) return null; // no gold number present
+    let y0 = pk, y1 = pk; while (y0 > 0 && rg[y0 - 1] >= 3) y0--; while (y1 < h - 1 && rg[y1 + 1] >= 3) y1++;
+    let x0 = 1e9, x1 = -1; for (let y = y0; y <= y1; y++) for (let x = 0; x < w; x++) if (isGoldNum(rgba, (y * w + x) * 4)) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+    if (x1 < x0) return null;
+    const sw = x1 - x0 + 5, sh = y1 - y0 + 5, out = new Uint8ClampedArray(sw * sh * 4);
+    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) { const sx = x0 - 2 + x, sy = y0 - 2 + y, di = (y * sw + x) * 4; let on = false; if (sx >= 0 && sy >= 0 && sx < w && sy < h) on = isGoldNum(rgba, (sy * w + sx) * 4); const v = on ? 0 : 255; out[di] = out[di + 1] = out[di + 2] = v; out[di + 3] = 255; }
+    return { rgba: out, w: sw, h: sh };
+  }
+
+  // tight bbox of dark ink inside a segment box
+  function _tightInk(b) { let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1; for (let y = 0; y < b.h; y++) for (let x = 0; x < b.w; x++) { const i = (y * b.w + x) * 4; if (b.rgba[i] < 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } } return x1 < x0 ? null : { x0, y0, x1, y1, w: x1 - x0 + 1, h: y1 - y0 + 1 }; }
+
   // ─── numeric badge reader (stacks §0.4, bets §0.5, pot §0.6) ───────────────
-  // Gate on COLOR first (occlusion/no-read), then read the BINARIZED crop with
-  // the template DigitMatcher. Returns { value:Number|null, raw, status }.
-  //   colorPx    : {rgba,w,h} from the color SOURCE crop  → occlusion gate
-  //   binarPx    : {rgba,w,h} from the BINARIZED crop      → DigitMatcher
-  //   digitMatcher: engine DigitMatcher (or null → can't read → no-read)
-  // A 'read' status with value===null means the gate passed but the matcher was
-  // not confident — still withheld (the caller treats it as not-confirmed).
-  function readNumericBadge(colorPx, binarPx, digitMatcher, opts) {
-    const cls = classifyPlate(colorPx.rgba, colorPx.w, colorPx.h, opts);
-    if (cls.status !== 'read') return { value: null, raw: null, status: cls.status, detail: cls };
-    if (!digitMatcher || digitMatcher.size === 0) {
-      return { value: null, raw: null, status: 'no-read', reason: 'no-templates' };
-    }
-    const res = digitMatcher.recognizeNumeric(binarPx.rgba, binarPx.w, binarPx.h, opts);
-    if (res.text == null || res.unmatched !== 0) {
-      return { value: null, raw: res.text, status: 'no-read', reason: 'low-confidence', confidence: res.confidence };
-    }
-    const value = parseBB(res.text);
-    if (value == null) return { value: null, raw: res.text, status: 'no-read', reason: 'unparseable' };
-    return { value, raw: res.text, status: 'read', confidence: res.confidence };
+  // strip→number. The COLOR/occlusion gate now lives in goldNumberStrip (no gold ⇒
+  // no strip). Here: segment → classify each glyph (dot by GEOMETRY / digit by
+  // CORRELATION, abstain on low cos OR low best-vs-2nd margin) → the SINGLE
+  // contiguous confident run (avatar + "BB" abstain and bound it; a mid-number
+  // abstain splits the run → whole-number abstains) → strip trailing B → parse.
+  // Never-confidently-wrong: a confusable glyph → no-read, never a wrong digit.
+  //   strip       : {rgba,w,h} binarized number strip (from goldNumberStrip, or a
+  //                 synthetic strip in tests). null/empty ⇒ no-read.
+  //   digitMatcher: engine DigitMatcher (correlation). null/empty ⇒ no-read.
+  function readNumericBadge(strip, digitMatcher, opts) {
+    opts = opts || {};
+    if (!strip || !strip.rgba || !strip.w || !strip.h) return { value: null, status: 'no-read', reason: 'no-gold' };
+    if (!digitMatcher || digitMatcher.size === 0) return { value: null, status: 'no-read', reason: 'no-templates' };
+    const cosMin = opts.digitCosMin != null ? opts.digitCosMin : 0.70;
+    const marginMin = opts.digitMargin != null ? opts.digitMargin : 0.07;
+    const bandH = strip.h;
+    const boxes = digitMatcher.segment(strip.rgba, strip.w, strip.h, opts);
+    const cls = boxes.map((b) => {
+      if (b.w < 2) return { ok: false };
+      const t = _tightInk(b); if (!t || t.h < 2 || t.h > 46) return { ok: false };
+      if (t.h < 0.45 * bandH) { // short ink: decimal point only if compact + at baseline
+        const atBaseline = (t.y0 / b.h) > 0.40, compact = t.w < 0.7 * bandH;
+        return (atBaseline && compact) ? { sym: '.', ok: true } : { ok: false };
+      }
+      const r = digitMatcher.match(b.rgba, b.w, b.h);
+      if (!r || r.confidence < cosMin || r.margin < marginMin) return { ok: false };
+      return { sym: r.symbol, ok: true };
+    });
+    const runs = []; let cur = null;
+    cls.forEach((c) => { if (c.ok) { if (!cur) cur = []; cur.push(c.sym); } else if (cur) { runs.push(cur); cur = null; } });
+    if (cur) runs.push(cur);
+    const valid = runs.map((s) => { const a = s.slice(); while (a.length && a[a.length - 1] === 'B') a.pop(); return a; })
+      .filter((a) => { if (!a.length || a.includes('B')) return false; const dots = a.filter((c) => c === '.').length, digs = a.filter((c) => c !== '.').length; return digs >= 1 && dots <= 1 && a.length <= 7 && a[0] !== '.'; });
+    if (valid.length !== 1) return { value: null, status: 'no-read', reason: valid.length === 0 ? 'no-run' : 'multi-run' };
+    const text = valid[0].join('');
+    const value = parseBB(text);
+    if (value == null) return { value: null, raw: text, status: 'no-read', reason: 'unparseable' };
+    return { value, raw: text, status: 'read' };
   }
 
   // ─── button puck: connected-component blob clustering (§0.8) ───────────────
@@ -301,10 +348,10 @@
     const obs = { stacks: {}, bets: {}, board: null, heroHole: null };
 
     for (const seat of R.SEATS) {
-      // stacks
-      const sc = frame.getColor(`stack_${seat}`), sb = frame.getBinarized(`stack_${seat}`);
-      obs.stacks[seat] = (sc && sb)
-        ? readNumericBadge(sc, sb, frame.digitMatcher, opts)
+      // stacks — gold-locate the number out of the wide COLOR crop, then read it
+      const sc = frame.getColor(`stack_${seat}`);
+      obs.stacks[seat] = sc
+        ? readNumericBadge(goldNumberStrip(sc, opts), frame.digitMatcher, opts)
         : { value: null, status: 'no-read', reason: 'no-crop' };
 
       // bets — hero (BC) NEVER from OCR (§0.10); sourced from known action.
@@ -313,17 +360,17 @@
           ? { value: frame.heroBet, status: 'read', source: 'hero-action' }
           : { value: null, status: 'no-read', reason: 'hero-action-unknown', source: 'hero-action' };
       } else {
-        const bc = frame.getColor(`bet_${seat}`), bb = frame.getBinarized(`bet_${seat}`);
-        obs.bets[seat] = (bc && bb)
-          ? readNumericBadge(bc, bb, frame.digitMatcher, opts)
+        const bc = frame.getColor(`bet_${seat}`);
+        obs.bets[seat] = bc
+          ? readNumericBadge(goldNumberStrip(bc, opts), frame.digitMatcher, opts)
           : { value: null, status: 'no-read', reason: 'no-crop' };
       }
     }
 
     // pot
-    const pc = frame.getColor('pot'), pb = frame.getBinarized('pot');
-    obs.pot = (pc && pb)
-      ? readNumericBadge(pc, pb, frame.digitMatcher, opts)
+    const pc = frame.getColor('pot');
+    obs.pot = pc
+      ? readNumericBadge(goldNumberStrip(pc, opts), frame.digitMatcher, opts)
       : { value: null, status: 'no-read', reason: 'no-crop' };
 
     // button
@@ -340,9 +387,9 @@
     // stack-delta heroBet and warn on drift. A misread here cannot corrupt the
     // snapshot — current_bets[hero] still comes from frame.heroBet — it only
     // raises a flag. This is the visible ground truth for the costliest field.
-    const hbc = frame.getColor(`bet_${R.HERO_SEAT}`), hbb = frame.getBinarized(`bet_${R.HERO_SEAT}`);
-    obs.heroBetObserved = (hbc && hbb)
-      ? readNumericBadge(hbc, hbb, frame.digitMatcher, opts)
+    const hbc = frame.getColor(`bet_${R.HERO_SEAT}`);
+    obs.heroBetObserved = hbc
+      ? readNumericBadge(goldNumberStrip(hbc, opts), frame.digitMatcher, opts)
       : { value: null, status: 'no-read', reason: 'no-crop' };
 
     // timer
@@ -367,7 +414,7 @@
   return {
     DEFAULTS,
     isYellow, isGreen, isWhiteText, isRedButton, fracMatching,
-    classifyPlate, parseBB, readNumericBadge,
+    classifyPlate, parseBB, readNumericBadge, goldNumberStrip,
     detectButton, timerFraction, turnIndicator, classifyActionSet, readCardCells,
     observeFrame,
     _engineLoaded: !!Engine, _regionsLoaded: !!Regions,

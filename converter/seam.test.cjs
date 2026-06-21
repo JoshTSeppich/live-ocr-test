@@ -49,11 +49,13 @@ function getCropsWith(colorCrop) {
     : null);
 }
 
-test('SEAM CLOSED: getCrops→buildFrame→observeFrame tags stack_TC occluded', () => {
+test('SEAM CLOSED: getCrops→buildFrame→observeFrame → no gold under the overlay → no-read', () => {
+  // The green banner hides the gold number, so the gold-locate finds nothing →
+  // no-read, value null. Never an OCR'd guess under the overlay (the seat shows "?").
   const { frame, observeOpts } = F.buildFrame(getCropsWith(COLOR), { videoW: 2940, videoH: 1846 }, {});
   const obs = O.observeFrame(frame, observeOpts);
-  assert.strictEqual(obs.stacks.TC.status, 'occluded');
-  assert.strictEqual(obs.stacks.TC.value, null); // never an OCR'd guess under the overlay
+  assert.strictEqual(obs.stacks.TC.status, 'no-read');
+  assert.strictEqual(obs.stacks.TC.value, null);
 });
 
 test('SEAM OPEN would regress: feeding binarized as the colour crop loses occlusion', () => {
