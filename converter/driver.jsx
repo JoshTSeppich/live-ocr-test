@@ -658,7 +658,7 @@ function ConverterPanel({ url = 'ws://127.0.0.1:8766' }) {
       React.createElement(TableViewPanel, { table: view.table }),
       // live card-readout (read-only): what the card pipeline matches each frame
       React.createElement('div', { style: S.cards },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, color: '#aaa', fontSize: 12 } },
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, rowGap: 6, color: '#aaa', fontSize: 12 } },
           React.createElement('span', null, 'card readout (live)'),
           React.createElement('span', { style: { color: '#666' } }, `rec: ${recordCount}`),
           React.createElement('button', { onClick: downloadReads, disabled: recordCount === 0, style: { fontSize: 11 } }, 'Download JSON'),
