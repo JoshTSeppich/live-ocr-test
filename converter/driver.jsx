@@ -111,7 +111,13 @@ function captureNumericCrops(getSnap, regions, fullW) {
   for (const r of regions) {
     if (!(r.kind === 'stack' || r.kind === 'bet' || r.kind === 'pot')) continue;
     const bx = r.x * snap.w, by = r.y * snap.h, bw = r.w * snap.w, bh = r.h * snap.h;
-    const mx = bw * 0.30, mTop = bh * 0.40, mBot = bh * 1.30; // gold number sits below the box
+    // The gold number lands up to ~150px (live) off the box at some seats (BL −148,
+    // BR +142) and is itself ~280px wide, so the worst-case extent is ~290px from
+    // box centre — the window must reach that or the gold-locator gets a CLIPPED
+    // number. Side 0.90·bw → window half-width ~340px; seats are ~620px apart live,
+    // so it never reaches a neighbour's number. Top/bottom 1.3·bh covers the ~52px
+    // vertical offset both ways.
+    const mx = bw * 0.90, mTop = bh * 1.30, mBot = bh * 1.30;
     const x0 = Math.max(0, Math.floor(bx - mx)), y0 = Math.max(0, Math.floor(by - mTop));
     const x1 = Math.min(snap.w, Math.ceil(bx + bw + mx)), y1 = Math.min(snap.h, Math.ceil(by + bh + mBot));
     const w = x1 - x0, h = y1 - y0;
