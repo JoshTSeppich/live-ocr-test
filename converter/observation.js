@@ -112,21 +112,27 @@
   // find the gold text-line band and return a BINARIZED strip (gold→0/ink, else
   // 255) of its full x-extent — or null when there's no gold number (empty/folded
   // seat, or a non-gold overlay). null ⇒ the never-wrong '?' at the seat level.
-  function goldNumberStrip(colorPx, opts) {
+  // Shared: peak text-line band of pixels matching `pred`, returned as a binarized
+  // strip (ink=0 where pred, else 255). null if no band (empty / wrong colour).
+  function _colorBandStrip(colorPx, pred, minPeak) {
     if (!colorPx || !colorPx.rgba) return null;
     const { rgba, w, h } = colorPx;
-    const minPeak = (opts && opts.goldMinPeak != null) ? opts.goldMinPeak : 6;
     const rg = new Int32Array(h);
-    for (let y = 0; y < h; y++) { let c = 0; for (let x = 0; x < w; x++) if (isGoldNum(rgba, (y * w + x) * 4)) c++; rg[y] = c; }
+    for (let y = 0; y < h; y++) { let c = 0; for (let x = 0; x < w; x++) if (pred(rgba, (y * w + x) * 4)) c++; rg[y] = c; }
     let pk = 0; for (let y = 1; y < h; y++) if (rg[y] > rg[pk]) pk = y;
-    if (rg[pk] < minPeak) return null; // no gold number present
+    if (rg[pk] < minPeak) return null;
     let y0 = pk, y1 = pk; while (y0 > 0 && rg[y0 - 1] >= 3) y0--; while (y1 < h - 1 && rg[y1 + 1] >= 3) y1++;
-    let x0 = 1e9, x1 = -1; for (let y = y0; y <= y1; y++) for (let x = 0; x < w; x++) if (isGoldNum(rgba, (y * w + x) * 4)) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+    let x0 = 1e9, x1 = -1; for (let y = y0; y <= y1; y++) for (let x = 0; x < w; x++) if (pred(rgba, (y * w + x) * 4)) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
     if (x1 < x0) return null;
     const sw = x1 - x0 + 5, sh = y1 - y0 + 5, out = new Uint8ClampedArray(sw * sh * 4);
-    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) { const sx = x0 - 2 + x, sy = y0 - 2 + y, di = (y * sw + x) * 4; let on = false; if (sx >= 0 && sy >= 0 && sx < w && sy < h) on = isGoldNum(rgba, (sy * w + sx) * 4); const v = on ? 0 : 255; out[di] = out[di + 1] = out[di + 2] = v; out[di + 3] = 255; }
+    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) { const sx = x0 - 2 + x, sy = y0 - 2 + y, di = (y * sw + x) * 4; let on = false; if (sx >= 0 && sy >= 0 && sx < w && sy < h) on = pred(rgba, (sy * w + sx) * 4); const v = on ? 0 : 255; out[di] = out[di + 1] = out[di + 2] = v; out[di + 3] = 255; }
     return { rgba: out, w: sw, h: sh };
   }
+  function goldNumberStrip(colorPx, opts) { return _colorBandStrip(colorPx, isGoldNum, (opts && opts.goldMinPeak != null) ? opts.goldMinPeak : 6); }
+  // POT is WHITE, not gold ("Pot: N.NN BB"). Same band→strip; the reader drops the
+  // "Pot:" prefix (opts.prefix) and the trailing "BB", and any stray white that isn't
+  // a clean number abstains. Tight pot box keeps the board / hand-strength out.
+  function whiteNumberStrip(colorPx, opts) { return _colorBandStrip(colorPx, isWhiteText, (opts && opts.whiteMinPeak != null) ? opts.whiteMinPeak : 8); }
 
   // tight bbox of dark ink inside a segment box
   function _tightInk(b) { let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1; for (let y = 0; y < b.h; y++) for (let x = 0; x < b.w; x++) { const i = (y * b.w + x) * 4; if (b.rgba[i] < 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } } return x1 < x0 ? null : { x0, y0, x1, y1, w: x1 - x0 + 1, h: y1 - y0 + 1 }; }
@@ -165,9 +171,19 @@
       const ok = !!r && r.symbol !== 'B' && r.confidence >= cosMin && r.margin >= marginMin;
       return ok ? { digit: true, sym: r.symbol } : { digit: false, tall };
     });
+    // POT-mode (opts.prefix): drop a leading "Pot:" WORD — a run of non-digits that
+    // is separated from the number by a SPACE. We skip it only when that space-gap
+    // exists, so a dropped LEADING number-digit (adjacent, no gap) still truncates.
+    let lo = 0;
+    if (opts.prefix) {
+      // "Pot:" letters partly match digits (o→0), so don't trust classification —
+      // use the layout: "Pot:" · SPACE · number · SPACE · "BB". Start reading after
+      // the FIRST word-gap (the space past the colon). No word-gap ⇒ read from 0.
+      for (let p = 0; p < boxes.length - 1; p++) { if (boxes[p + 1].x0 - boxes[p].x1 >= (opts.prefixGap || 14)) { lo = p + 1; break; } }
+    }
     // LEFT: skip leading SHORT non-digits (avatar/noise). A leading TALL non-digit is
     // a dropped leading digit → truncation.
-    let lo = 0; while (lo < cls.length && !cls[lo].digit && !cls[lo].tall) lo++;
+    while (lo < cls.length && !cls[lo].digit && !cls[lo].tall) lo++;
     if (lo >= cls.length) return { value: null, status: 'no-read', reason: 'no-run' };
     if (!cls[lo].digit) return { value: null, status: 'no-read', reason: 'truncated' };
     // Read LEFT-TO-RIGHT: the leading run of confident digits/dots IS the number; the
@@ -384,7 +400,7 @@
     // pot
     const pc = frame.getColor('pot');
     obs.pot = pc
-      ? readNumericBadge(goldNumberStrip(pc, opts), frame.digitMatcher, opts)
+      ? readNumericBadge(whiteNumberStrip(pc, opts), frame.digitMatcher, Object.assign({ prefix: true }, opts))
       : { value: null, status: 'no-read', reason: 'no-crop' };
 
     // button
@@ -428,7 +444,7 @@
   return {
     DEFAULTS,
     isYellow, isGreen, isWhiteText, isRedButton, fracMatching,
-    classifyPlate, parseBB, readNumericBadge, goldNumberStrip,
+    classifyPlate, parseBB, readNumericBadge, goldNumberStrip, whiteNumberStrip,
     detectButton, timerFraction, turnIndicator, classifyActionSet, readCardCells,
     observeFrame,
     _engineLoaded: !!Engine, _regionsLoaded: !!Regions,

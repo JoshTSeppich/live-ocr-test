@@ -135,16 +135,20 @@
   // window (side 0.90·w, top/bottom 1.30·h). The gold-locate then finds the number
   // wherever it sits; gold-vs-white + the contiguous-run logic drop the name/avatar.
   // Seats are ~735px apart (REF) vs a ~400px window half-width → no neighbour bleed.
-  function widenNum(b) {
-    const mx = Math.round(0.90 * b.w), my = Math.round(1.30 * b.h);
+  function widen(b, fx, fy) {
+    const mx = Math.round(fx * b.w), my = Math.round(fy * b.h);
     return box(Math.max(0, b.x - mx), Math.max(0, b.y - my), b.w + 2 * mx, b.h + 2 * my);
   }
+  const widenNum = (b) => widen(b, 0.90, 1.30); // seats drift ±~0.9·w per hand
   const REGION_DEFS = [];
   for (const s of SEATS) {
     REGION_DEFS.push({ id: `stack_${s}`, name: `stack_${s}`, seat: s, kind: 'stack', box: widenNum(STACK_BOXES[s]) });
     REGION_DEFS.push({ id: `bet_${s}`, name: `bet_${s}`, seat: s, kind: 'bet', box: widenNum(BET_BOXES[s]) });
   }
-  REGION_DEFS.push({ id: 'pot', name: 'pot', kind: 'pot', box: widenNum(POT_BOX) });
+  // The pot is CENTRE-table and anchor-stable (the board reads reliably there), so it
+  // does NOT drift like seat numbers — a TIGHT box keeps the crop on "Pot: N.NN BB"
+  // and away from the board / hand-strength / stakes text. Only a small anchor margin.
+  REGION_DEFS.push({ id: 'pot', name: 'pot', kind: 'pot', box: widen(POT_BOX, 0.22, 0.45) });
   REGION_DEFS.push({ id: 'board', name: 'board', kind: 'cards', cells: BOARD_CELLS, box: BOARD_BOX });
   REGION_DEFS.push({ id: 'hero_hole', name: 'hero_hole', kind: 'cards', cells: HERO_HOLE_CELLS, box: HERO_HOLE_BOX });
   REGION_DEFS.push({ id: 'button_scan', name: 'button_scan', kind: 'button', box: BUTTON_SCAN_RECT });

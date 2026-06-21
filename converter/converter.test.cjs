@@ -53,6 +53,18 @@ function goldStrip(value) {
   });
   return c;
 }
+// the POT renders the number in WHITE (observeFrame white-locates it); "Pot:" prefix
+// is handled by the reader's prefix-skip and is omitted here (it's conditional).
+function whitePot(value) {
+  const chars = [...String(value)], SC = 2, G = 8, CW = 10 * SC, DH = 20 * SC, H = DH + 16, W = G + chars.length * (CW + G) + G, c = crop(W, H, DARK);
+  chars.forEach((ch, i) => {
+    const x0 = G + i * (CW + G), yTop = 8;
+    if (ch === '.') { rect(c, x0 + 4, yTop + DH - 8, 8, 8, WHITE); return; }
+    const g = glyph(ch);
+    for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) if (g.rgba[(y * 10 + x) * 4] === 0) rect(c, x0 + x * SC, yTop + y * SC, SC, SC, WHITE);
+  });
+  return c;
+}
 // Card crops at NATIVE region scale so they round-trip through the real per-card
 // strip cropper (frame.js sliceCells): each card is a WHITE body (felt above, so
 // the cardTop scan fires) with a code-UNIQUE dark mark in its 55-wide left-corner
@@ -104,7 +116,7 @@ function scene(sc) {
     if (id.startsWith('stack_')) { const seat = id.slice(6); return sc.stacks[seat] != null ? C(goldStrip(sc.stacks[seat])) : null; }
     if (id === 'bet_TR') return sc.betTR != null ? C(goldStrip(sc.betTR)) : null;
     if (id.startsWith('bet_')) return null; // no bet badge → no gold → no-read → 0
-    if (id === 'pot') return C(goldStrip(sc.pot));
+    if (id === 'pot') return C(whitePot(sc.pot));
     if (id === 'button_scan') { const c = crop(Reg.BUTTON_SCAN_RECT.w, Reg.BUTTON_SCAN_RECT.h, DARK); const s = Reg.BUTTON_SLOTS[sc.button]; disc(c, s.x - Reg.BUTTON_SCAN_RECT.x, s.y - Reg.BUTTON_SCAN_RECT.y, 16, YELLOW); return C(c); }
     if (id === 'timer') return C(crop(420, 13, sc.timerFrac >= 0.99 ? GREEN : DARK)); // simple full/empty
     if (id === 'action_panel') { const c = crop(120, 60, DARK); if (sc.heroTurn) rect(c, 10, 10, 60, 30, RED); return C(c); }

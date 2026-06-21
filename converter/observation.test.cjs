@@ -204,9 +204,11 @@ test('turnIndicator: no buttons → not hero turn', () => {
 // ── observeFrame (assembler) ─────────────────────────────────────────────────
 // dark-ink strip → a GOLD-on-dark COLOR plate (live-like), digits densified 2× so
 // they clear goldNumberStrip's empty-seat peak guard. observeFrame gold-locates it.
-function goldColorOf(strip) {
+function goldColorOf(strip) { return colorOf(strip, YELLOW); }
+function whiteColorOf(strip) { return colorOf(strip, WHITE); } // pot number is WHITE
+function colorOf(strip, col) {
   const SC = 2, c = makeCrop(strip.w * SC + 40, strip.h * SC + 20, DARK);
-  for (let y = 0; y < strip.h; y++) for (let x = 0; x < strip.w; x++) if (strip.rgba[(y * strip.w + x) * 4] < 128) rect(c, x * SC + 20, y * SC + 10, SC, SC, YELLOW);
+  for (let y = 0; y < strip.h; y++) for (let x = 0; x < strip.w; x++) if (strip.rgba[(y * strip.w + x) * 4] < 128) rect(c, x * SC + 20, y * SC + 10, SC, SC, col);
   return c;
 }
 function fakeFrame(over) {
@@ -224,7 +226,7 @@ function fakeFrame(over) {
     base.color[`stack_${s}`] = gold;
     base.color[`bet_${s}`] = gold;
   }
-  base.color['pot'] = gold;
+  base.color['pot'] = whiteColorOf(strip); // pot is WHITE, not gold
   // button: disc at the TR slot, in button_scan-local coords
   const btn = makeCrop(R.BUTTON_SCAN_RECT.w, R.BUTTON_SCAN_RECT.h, DARK);
   disc(btn, R.BUTTON_SLOTS.TR.x - R.BUTTON_SCAN_RECT.x, R.BUTTON_SLOTS.TR.y - R.BUTTON_SCAN_RECT.y, 16, YELLOW);
