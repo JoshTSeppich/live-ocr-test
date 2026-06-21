@@ -150,23 +150,33 @@
     const bandH = strip.h;
     const boxes = digitMatcher.segment(strip.rgba, strip.w, strip.h, opts);
     const cls = boxes.map((b) => {
-      if (b.w < 2) return { ok: false };
-      const t = _tightInk(b); if (!t || t.h < 2 || t.h > 46) return { ok: false };
+      if (b.w < 2) return { ok: false, tall: false };
+      const t = _tightInk(b); if (!t || t.h < 2 || t.h > 46) return { ok: false, tall: false };
+      const tall = t.h >= 0.6 * bandH; // a digit/B-height glyph (vs a short dot/noise/avatar)
       if (t.h < 0.45 * bandH) { // short ink: decimal point only if compact + at baseline
         const atBaseline = (t.y0 / b.h) > 0.40, compact = t.w < 0.7 * bandH;
-        return (atBaseline && compact) ? { sym: '.', ok: true } : { ok: false };
+        return (atBaseline && compact) ? { sym: '.', ok: true } : { ok: false, tall: false };
       }
       const r = digitMatcher.match(b.rgba, b.w, b.h);
-      if (!r || r.confidence < cosMin || r.margin < marginMin) return { ok: false };
+      if (!r || r.confidence < cosMin || r.margin < marginMin) return { ok: false, tall };
       return { sym: r.symbol, ok: true };
     });
-    const runs = []; let cur = null;
-    cls.forEach((c) => { if (c.ok) { if (!cur) cur = []; cur.push(c.sym); } else if (cur) { runs.push(cur); cur = null; } });
-    if (cur) runs.push(cur);
-    const valid = runs.map((s) => { const a = s.slice(); while (a.length && a[a.length - 1] === 'B') a.pop(); return a; })
-      .filter((a) => { if (!a.length || a.includes('B')) return false; const dots = a.filter((c) => c === '.').length, digs = a.filter((c) => c !== '.').length; return digs >= 1 && dots <= 1 && a.length <= 7 && a[0] !== '.'; });
-    if (valid.length !== 1) return { value: null, status: 'no-read', reason: valid.length === 0 ? 'no-run' : 'multi-run' };
-    const text = valid[0].join('');
+    // Trim leading + trailing abstains, but ONLY the SHORT ones (avatar / noise).
+    // A TALL abstain is a glyph-height shape that didn't classify = a DROPPED DIGIT
+    // (or a degraded BB): keeping it makes the span fail the all-confident check
+    // below → abstain. This is what stops a 157px "207.1" strip surviving as "0"
+    // when the other glyphs (incl. BB) abstained. Seat-level never-wrong guard.
+    let lo = 0, hi = cls.length - 1;
+    while (lo <= hi && !cls[lo].ok && !cls[lo].tall) lo++;
+    while (hi >= lo && !cls[hi].ok && !cls[hi].tall) hi--;
+    if (lo > hi) return { value: null, status: 'no-read', reason: 'no-run' };
+    const seq = [];
+    for (let i = lo; i <= hi; i++) { if (!cls[i].ok) return { value: null, status: 'no-read', reason: 'truncated' }; seq.push(cls[i].sym); }
+    while (seq.length && seq[seq.length - 1] === 'B') seq.pop(); // drop the "BB" suffix
+    if (!seq.length || seq.includes('B')) return { value: null, status: 'no-read', reason: 'mid-B' };
+    const dots = seq.filter((c) => c === '.').length, digs = seq.filter((c) => c !== '.').length;
+    if (digs < 1 || dots > 1 || seq.length > 7 || seq[0] === '.') return { value: null, status: 'no-read', reason: 'shape' };
+    const text = seq.join('');
     const value = parseBB(text);
     if (value == null) return { value: null, raw: text, status: 'no-read', reason: 'unparseable' };
     return { value, raw: text, status: 'read' };
