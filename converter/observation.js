@@ -149,31 +149,35 @@
     const marginMin = opts.digitMargin != null ? opts.digitMargin : 0.07;
     const bandH = strip.h;
     const boxes = digitMatcher.segment(strip.rgba, strip.w, strip.h, opts);
+    // Classify each glyph as a CONFIDENT DIGIT (the number's alphabet is ONLY 0-9
+    // and '.') or a TERMINATOR. We keep 'B' in the matcher so a real "BB" matches B
+    // (or 8 with a low B-vs-8 margin) — either way it is NOT a confident digit, so it
+    // can never leak as "88". 'B' is simply not in the output alphabet.
     const cls = boxes.map((b) => {
-      if (b.w < 2) return { ok: false, tall: false };
-      const t = _tightInk(b); if (!t || t.h < 2 || t.h > 46) return { ok: false, tall: false };
-      const tall = t.h >= 0.6 * bandH; // a digit/B-height glyph (vs a short dot/noise/avatar)
-      if (t.h < 0.45 * bandH) { // short ink: decimal point only if compact + at baseline
+      if (b.w < 2) return { digit: false, tall: false };
+      const t = _tightInk(b); if (!t || t.h < 2 || t.h > 46) return { digit: false, tall: false };
+      const tall = t.h >= 0.6 * bandH; // glyph-height (vs a short dot / noise / avatar)
+      if (t.h < 0.45 * bandH) { // short ink: a decimal point only if compact + at baseline
         const atBaseline = (t.y0 / b.h) > 0.40, compact = t.w < 0.7 * bandH;
-        return (atBaseline && compact) ? { sym: '.', ok: true } : { ok: false, tall: false };
+        return (atBaseline && compact) ? { digit: true, sym: '.' } : { digit: false, tall: false };
       }
       const r = digitMatcher.match(b.rgba, b.w, b.h);
-      if (!r || r.confidence < cosMin || r.margin < marginMin) return { ok: false, tall };
-      return { sym: r.symbol, ok: true };
+      const ok = !!r && r.symbol !== 'B' && r.confidence >= cosMin && r.margin >= marginMin;
+      return ok ? { digit: true, sym: r.symbol } : { digit: false, tall };
     });
-    // Trim leading + trailing abstains, but ONLY the SHORT ones (avatar / noise).
-    // A TALL abstain is a glyph-height shape that didn't classify = a DROPPED DIGIT
-    // (or a degraded BB): keeping it makes the span fail the all-confident check
-    // below → abstain. This is what stops a 157px "207.1" strip surviving as "0"
-    // when the other glyphs (incl. BB) abstained. Seat-level never-wrong guard.
-    let lo = 0, hi = cls.length - 1;
-    while (lo <= hi && !cls[lo].ok && !cls[lo].tall) lo++;
-    while (hi >= lo && !cls[hi].ok && !cls[hi].tall) hi--;
-    if (lo > hi) return { value: null, status: 'no-read', reason: 'no-run' };
-    const seq = [];
-    for (let i = lo; i <= hi; i++) { if (!cls[i].ok) return { value: null, status: 'no-read', reason: 'truncated' }; seq.push(cls[i].sym); }
-    while (seq.length && seq[seq.length - 1] === 'B') seq.pop(); // drop the "BB" suffix
-    if (!seq.length || seq.includes('B')) return { value: null, status: 'no-read', reason: 'mid-B' };
+    // LEFT: skip leading SHORT non-digits (avatar/noise). A leading TALL non-digit is
+    // a dropped leading digit → truncation.
+    let lo = 0; while (lo < cls.length && !cls[lo].digit && !cls[lo].tall) lo++;
+    if (lo >= cls.length) return { value: null, status: 'no-read', reason: 'no-run' };
+    if (!cls[lo].digit) return { value: null, status: 'no-read', reason: 'truncated' };
+    // Read LEFT-TO-RIGHT: the leading run of confident digits/dots IS the number; the
+    // first non-digit terminates it (everything after = "BB" suffix, discarded).
+    const seq = []; let i = lo;
+    for (; i < cls.length && cls[i].digit; i++) seq.push(cls[i].sym);
+    // Look-ahead: a non-digit terminates as a SUFFIX only if no confident digit
+    // follows. A digit after the terminator means it was a DROPPED internal digit
+    // (e.g. "207.1" with a weak 7) → truncation → abstain, never a partial.
+    for (let j = i; j < cls.length; j++) if (cls[j].digit) return { value: null, status: 'no-read', reason: 'truncated' };
     const dots = seq.filter((c) => c === '.').length, digs = seq.filter((c) => c !== '.').length;
     if (digs < 1 || dots > 1 || seq.length > 7 || seq[0] === '.') return { value: null, status: 'no-read', reason: 'shape' };
     const text = seq.join('');

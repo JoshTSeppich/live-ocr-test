@@ -664,6 +664,20 @@ function _digitGrid(rgba, w, h) {
   return g;
 }
 function _cosGrid(a, b) { let dot = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i]; nb += b[i]; } return na && nb ? dot / Math.sqrt(na * nb) : 0; }
+// 8-vs-B discriminator the global cosine washes out: B has a SOLID vertical left
+// stroke (full-height ink run in the left columns); 8 PINCHES mid-left (its left
+// ink breaks into two loop-halves). Returns the max contiguous vertical ink run in
+// the leftmost ~25% of columns — long ⇒ B, short ⇒ 8.
+const _LEFT_COLS = Math.max(1, Math.round(CDIGIT_W * 0.25));
+function _leftEdgeRun(grid) {
+  let best = 0;
+  for (let x = 0; x < _LEFT_COLS; x++) {
+    let run = 0;
+    for (let y = 0; y < CDIGIT_H; y++) { if (grid[y * CDIGIT_W + x]) { run++; if (run > best) best = run; } else run = 0; }
+  }
+  return best;
+}
+const LEFT_EDGE_B_MIN = 22; // ≥ this max-run ⇒ B (full stroke); below ⇒ 8 (pinched)
 
 // Copy a column band [x0, x1) (full height) of an RGBA buffer into a new,
 // tightly-packed RGBA buffer. Used to hand each segmented glyph to match().
@@ -716,8 +730,10 @@ class DigitMatcher {
       const sc = _cosGrid(probe, grid);
       if (sc > b1) { b2 = b1; b1 = sc; sym = symbol; } else if (sc > b2) b2 = sc;
     }
+    // 8↔B are near-identical to the cosine grid; decide them by the left-edge run.
+    if (sym === '8' || sym === 'B') sym = _leftEdgeRun(probe) >= LEFT_EDGE_B_MIN ? 'B' : '8';
     return sym == null ? null
-      : { symbol: sym, confidence: b1, margin: b1 - (b2 < 0 ? 0 : b2), distance: 1 - b1 };
+      : { symbol: sym, confidence: b1, margin: b1 - (b2 < 0 ? 0 : b2), distance: 1 - b1, leftRun: _leftEdgeRun(probe) };
   }
   clear() { this.templates.clear(); this._save(); }
   forget(symbol) { this.templates.delete(symbol); this._save(); }
