@@ -15,3 +15,9 @@ dist/
 *.swp
 .idea/
 .vscode/
+
+# local scratch (regions edit backups + one-off console probes — not source)
+*.bak
+*.bak[0-9]
+*.prevanchor
+*-probe.console.js
