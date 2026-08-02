@@ -12,7 +12,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const HTML = resolve(root, 'Live OCR Test.html'); // filename keeps its space (see commit msg)
+// Every HTML page that loads the shared bundle must be re-stamped, or its SRI goes
+// stale on the next build and the browser blocks the (now-mismatched) script.
+//   Live OCR Test.html — the full legacy harness (filename keeps its space)
+//   table.html         — the clean, table-only page (same bundle, hides the rest)
+const HTML_FILES = ['Live OCR Test.html', 'table.html'];
 
 // Return both the SRI (base64 sha384) and a short hex cache-bust token, derived
 // from the file bytes — so a rebuilt bundle gets a NEW url (?v=…) the browser
@@ -35,16 +39,17 @@ const tags = {
 
 const hashes = { 'SRI:app.css': digest('dist/app.css'), 'SRI:app.js': digest('dist/app.js') };
 
-let html = readFileSync(HTML, 'utf8');
-for (const [marker, makeTag] of Object.entries(tags)) {
-  // Replace the entire line that ends with this marker comment.
-  const lineRe = new RegExp(`^.*<!-- ${marker} -->.*$`, 'm');
-  if (!lineRe.test(html)) {
-    throw new Error(`marker "${marker}" not found in ${HTML} — cannot inject SRI`);
+for (const file of HTML_FILES) {
+  const path = resolve(root, file);
+  let html = readFileSync(path, 'utf8');
+  for (const [marker, makeTag] of Object.entries(tags)) {
+    const lineRe = new RegExp(`^.*<!-- ${marker} -->.*$`, 'm');
+    if (!lineRe.test(html)) {
+      throw new Error(`marker "${marker}" not found in ${file} — cannot inject SRI`);
+    }
+    html = html.replace(lineRe, makeTag(hashes[marker]));
   }
-  html = html.replace(lineRe, makeTag(hashes[marker]));
+  writeFileSync(path, html);
 }
-
-writeFileSync(HTML, html);
-console.log('[inject-sri] stamped:');
+console.log('[inject-sri] stamped ' + HTML_FILES.join(', ') + ':');
 for (const [marker, h] of Object.entries(hashes)) console.log(`  ${marker}  ${h.sri}  ?v=${h.bust}`);

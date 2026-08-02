@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Josh's College Bot — Live Table</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- CLEAN table page. Loads the SAME bundle as Live OCR Test.html (same SRI), but
+       shows ONLY the converter panel ("Advisor" tab = the live table), full-width.
+       The legacy OCR-test harness (#root) and the always-on-top advice PiP
+       (#advisor-root) still mount (kept in the DOM so their createRoot() calls don't
+       throw) but are hidden — this page is just the table. The legacy full page
+       remains available, untouched, at Live OCR Test.html. -->
+  <link rel="stylesheet" href="dist/app.css?v=aad9de1f47ab" integrity="sha384-B9ujYBiwUTWqCJug2wgpKq+F8UxRGD/VZsNZngL7ft+FkK/QyqqfpBLEWP4D3MId" crossorigin="anonymous"><!-- SRI:app.css -->
+  <style>
+    html, body { margin: 0; background: #0c0c0c; }
+    /* legacy harness + advice PiP still mount, but this page hides them */
+    #root, #advisor-root { display: none !important; }
+    /* our converter panel: promote from a floating 470px rail to a full-page column */
+    #converter-root > div {
+      position: static !important;
+      right: auto !important; top: auto !important;
+      width: 100% !important; max-width: 1040px !important;
+      margin: 12px auto !important; max-height: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script defer src="dist/app.js?v=f407e7640155" integrity="sha384-vzmqEZnBBwSOGTk9fhVHjwBKfpMF/qGYd37009N+N65Yba1ykTlJCf2Nqp921liN" crossorigin="anonymous"></script><!-- SRI:app.js -->
+</body>
+</html>
